@@ -1,7 +1,2 @@
-[tool.poetry.dependencies]
-python = "^3.9"
-fastapi = "^0.104.1"
-twilio = "^8.10.0"
-python-dotenv = "^1.0.0"
-
-[tool.vercel.scripts]
+[project.scripts]
+app = "app"
