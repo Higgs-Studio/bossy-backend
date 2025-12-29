@@ -13,7 +13,7 @@ app = FastAPI()
 # Initialize Twilio client
 ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE = os.getenv("TWILIO_PHONE_NUMBER")  # e.g., "whatsapp:+14155238886"
+TWILIO_PHONE = os.getenv("TWILIO_PHONE_NUMBER")
 
 client = Client(ACCOUNT_SID, AUTH_TOKEN)
 
