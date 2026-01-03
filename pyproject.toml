@@ -5,7 +5,8 @@ dependencies = [
   "fastapi>0.104.1",
   "twilio>8.10.0",
   "python-dotenv>1.0.0",
-  "python-multipart"
+  "python-multipart",
+  "supabase>=2.27.0"
 ]
 requires-python = ">=3.9"
 authors = [
@@ -33,6 +34,7 @@ fastapi = "^0.104.1"
 twilio = "^8.10.0"
 python-dotenv = "^1.0.0"
 python-multipart = "^0.0.0"
+supabase = "^2.27.0"
 
 [project.scripts]
 app = "app"
