@@ -111,7 +111,7 @@ async def get_tasks_by_user(user_id: str):
     """
     try:
         # Query tasks table filtered by user_id
-        response = supabase.table("tasks").select("*").eq("user_id", user_id).execute()
+        response = supabase.table("tasks").select("*").execute()
         
         return {
             "success": True,
