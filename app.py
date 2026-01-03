@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Response, HTTPException, Security
 from fastapi.responses import PlainTextResponse
-from fastapi.security.api_key import APIKeyHeader
+# from fastapi.security.api_key import APIKeyHeader
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 from supabase import create_client, Client as SupabaseClient
@@ -27,18 +27,18 @@ supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 # API Key security
 API_KEY_NAME = "X-API-Key"
 MY_API_SECRET = os.getenv("MY_API_SECRET")
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+# api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 logger = logging.getLogger(__name__)
 
-async def get_api_key(api_key: str = Security(api_key_header)):
-    """Validates the API Key from the header"""
-    if api_key == MY_API_SECRET:
-        return api_key
-    raise HTTPException(
-        status_code=403,
-        detail="Could not validate credentials"
-    )
+# async def get_api_key(api_key: str = Security(api_key_header)):
+#     """Validates the API Key from the header"""
+#     if api_key == MY_API_SECRET:
+#         return api_key
+#     raise HTTPException(
+#         status_code=403,
+#         detail="Could not validate credentials"
+#     )
 
 def process_message(user_message: str) -> str:
     """
@@ -98,7 +98,7 @@ def read_root():
     return {"status": "WhatsApp chatbot is running", "endpoint": "/webhook"}
 
 @app.get("/tasks/{user_id}")
-async def get_tasks_by_user(user_id: str, api_key: str = Security(get_api_key)):
+async def get_tasks_by_user(user_id: str):
     """
     Get all tasks for a specific user from Supabase.
     Protected by 'X-API-Key' header.
