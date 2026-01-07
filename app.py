@@ -577,7 +577,7 @@ def send_whatsapp_message(to_number: str, message: str):
     try:
         message_instance = client.messages.create(
             body=message,
-            from_=f"whatsapp:{TWILIO_PHONE}",
+            from_=TWILIO_PHONE,
             to=to_number
         )
         logger.info(f"Message sent successfully. SID: {message_instance.sid}")
