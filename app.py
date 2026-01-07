@@ -11,7 +11,7 @@ import httpx
 import json
 from typing import Annotated, TypedDict, List, Dict, Any
 from datetime import datetime
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
@@ -71,7 +71,12 @@ def break_goal_into_tasks(goal: str, user_id: str) -> str:
     """
     try:
         # Use LLM to break down the goal into tasks
-        llm = ChatOllama(model="llama3.2:3b", temperature=0.7)
+        llm = ChatOpenAI(
+            model="deepseek-chat",
+            temperature=0.7,
+            base_url="https://api.deepseek.com",
+            api_key=os.getenv("DEEPSEEK_API_KEY")
+        )
         
         prompt = f"""You are a task planning assistant. Break down the following goal into 3-5 specific, actionable tasks.
         
@@ -220,8 +225,13 @@ class AgentState(TypedDict):
 def create_agent_graph():
     """Create and configure the LangGraph agent with tools."""
     
-    # Initialize LLM
-    llm = ChatOllama(model="llama3.2:3b", temperature=0.7)
+    # Initialize LLM with DeepSeek API
+    llm = ChatOpenAI(
+        model="deepseek-chat",
+        temperature=0.7,
+        base_url="https://api.deepseek.com",
+        api_key=os.getenv("DEEPSEEK_API_KEY")
+    )
     
     # Bind tools to LLM
     tools = [break_goal_into_tasks, create_task_in_supabase, get_user_tasks]
@@ -298,7 +308,7 @@ agent_graph = create_agent_graph()
 
 def process_message(user_message: str, user_id: str = "default_user") -> str:
     """
-    Process incoming message using LangGraph agent with Ollama LLM.
+    Process incoming message using LangGraph agent with DeepSeek LLM.
     The agent can break down goals into tasks and manage them in Supabase.
     
     Args:
