@@ -16,7 +16,6 @@ from app import process_message
 
 def main():
     """Interactive test interface for the agent."""
-    
     print("=" * 60)
     print("LangGraph Task Management Agent - Test Interface")
     print("=" * 60)
