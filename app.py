@@ -92,6 +92,45 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
             start = date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
             end_date = (start + timedelta(days=30)).isoformat()
         
+        # Check for conflicts with existing active goals
+        existing_goals_result = supabase.table("goals").select("id, title, intensity, status").eq("user_id", user_id).eq("status", "active").execute()
+        existing_goals = existing_goals_result.data if existing_goals_result.data else []
+        
+        conflicts = []
+        warnings = []
+        
+        # Check for too many high-intensity goals
+        high_intensity_count = sum(1 for g in existing_goals if g.get("intensity") == "high")
+        if intensity == "high" and high_intensity_count >= 2:
+            warnings.append(f"You already have {high_intensity_count} high-intensity goals active. Adding another high-intensity goal may be overwhelming.")
+        elif intensity == "high" and high_intensity_count >= 1:
+            warnings.append(f"You have {high_intensity_count} other high-intensity goal(s) active. Make sure you can handle both.")
+        
+        # Check for date overlaps with existing goals
+        start = date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
+        end = date.fromisoformat(end_date) if isinstance(end_date, str) else end_date
+        
+        for existing_goal in existing_goals:
+            existing_start = date.fromisoformat(existing_goal.get("start_date", "")) if existing_goal.get("start_date") else None
+            existing_end = date.fromisoformat(existing_goal.get("end_date", "")) if existing_goal.get("end_date") else None
+            
+            if existing_start and existing_end:
+                # Check if date ranges overlap
+                if not (end < existing_start or start > existing_end):
+                    overlap_msg = f"Date range overlaps with existing goal '{existing_goal.get('title', 'Untitled')}' ({existing_goal.get('intensity', 'medium')} intensity)"
+                    if existing_goal.get("intensity") == "high" and intensity == "high":
+                        conflicts.append(overlap_msg)
+                    else:
+                        warnings.append(overlap_msg)
+        
+        # If there are critical conflicts, return warning but allow creation
+        conflict_info = {
+            "warnings": warnings,
+            "conflicts": conflicts,
+            "existing_goals_count": len(existing_goals),
+            "high_intensity_count": high_intensity_count
+        }
+        
         # Create the goal first
         goal_data = {
             "user_id": user_id,
@@ -159,12 +198,20 @@ Return ONLY the JSON array, no other text."""
             result = supabase.table("daily_tasks").insert(task_data).execute()
             created_tasks.append(result.data[0] if result.data else task_data)
         
-        return json.dumps({
+        response_data = {
             "success": True,
             "message": f"Created goal '{goal}' with {len(created_tasks)} daily tasks",
             "goal": goal_result.data[0],
             "tasks": created_tasks
-        })
+        }
+        
+        # Include conflict information if any
+        if warnings or conflicts:
+            response_data["conflict_info"] = conflict_info
+            if conflicts:
+                response_data["message"] += f" (Warning: {len(conflicts)} potential conflicts detected)"
+        
+        return json.dumps(response_data)
         
     except json.JSONDecodeError as e:
         logger.error(f"JSON parsing error: {e}")
@@ -210,6 +257,35 @@ def create_task_in_supabase(task_text: str, user_id: str, goal_id: str = None, t
         if not task_date:
             task_date = date.today().isoformat()
         
+        # Check for conflicts with existing tasks on the same date
+        existing_tasks_result = supabase.table("daily_tasks").select("id, task_text, task_date").eq("task_date", task_date).in_("goal_id", [goal_id]).execute()
+        existing_tasks = existing_tasks_result.data if existing_tasks_result.data else []
+        
+        # Also check tasks from other active goals on the same date
+        all_active_goals_result = supabase.table("goals").select("id").eq("user_id", user_id).eq("status", "active").execute()
+        all_active_goal_ids = [g["id"] for g in (all_active_goals_result.data if all_active_goals_result.data else [])]
+        
+        all_tasks_on_date_result = supabase.table("daily_tasks").select("id, task_text, goal_id").eq("task_date", task_date).in_("goal_id", all_active_goal_ids).execute()
+        all_tasks_on_date = all_tasks_on_date_result.data if all_tasks_on_date_result.data else []
+        
+        warnings = []
+        conflicts = []
+        
+        # Check if there are too many tasks on the same date
+        if len(all_tasks_on_date) >= 5:
+            conflicts.append(f"You already have {len(all_tasks_on_date)} tasks scheduled for {task_date}. This may be too many for one day.")
+        elif len(all_tasks_on_date) >= 3:
+            warnings.append(f"You have {len(all_tasks_on_date)} other tasks scheduled for {task_date}. Make sure you can handle them all.")
+        
+        # Check for similar tasks on the same date
+        task_lower = task_text.lower()
+        for existing_task in all_tasks_on_date:
+            existing_text = existing_task.get("task_text", "").lower()
+            # Simple similarity check - if tasks are very similar
+            if existing_text and task_lower in existing_text or existing_text in task_lower:
+                if len(task_lower) > 10 and len(existing_text) > 10:  # Only flag if both are substantial
+                    warnings.append(f"Similar task already exists on {task_date}: '{existing_task.get('task_text', '')}'")
+        
         task_data = {
             "goal_id": goal_id,
             "task_date": task_date,
@@ -218,11 +294,23 @@ def create_task_in_supabase(task_text: str, user_id: str, goal_id: str = None, t
         
         result = supabase.table("daily_tasks").insert(task_data).execute()
         
-        return json.dumps({
+        response_data = {
             "success": True,
             "message": f"Task '{task_text}' created successfully",
             "task": result.data[0] if result.data else task_data
-        })
+        }
+        
+        # Include conflict information if any
+        if warnings or conflicts:
+            response_data["conflict_info"] = {
+                "warnings": warnings,
+                "conflicts": conflicts,
+                "tasks_on_date": len(all_tasks_on_date) + 1  # +1 for the new task
+            }
+            if conflicts:
+                response_data["message"] += f" (Warning: {len(conflicts)} potential conflicts detected)"
+        
+        return json.dumps(response_data)
         
     except Exception as e:
         logger.error(f"Error creating task: {e}")
@@ -504,13 +592,18 @@ Boss type: {boss_type}
 
 **When a user mentions a goal or project:**
 - Use break_goal_into_tasks to create the goal and daily tasks
+- Check the response for conflict_info - if there are warnings or conflicts, mention them to the user
+- If there are conflicts (especially high-intensity goal overlaps), warn the user but let them decide
 - Respond naturally about what you're setting up
 - Don't just list tasks—talk about them like a boss would
 - Example: "Alright, let's break this down. I'm setting up your goal and here's what you're doing today..."
+- If conflicts detected: "Heads up—you've already got X high-intensity goals running. This might be a lot to handle. Still want to proceed?"
 
 **When a user wants to create a single task:**
 - Use create_task_in_supabase (links to their most recent active goal)
+- Check the response for conflict_info - if there are warnings about too many tasks on a date, mention it
 - Acknowledge it naturally: "Got it. Added that to your list."
+- If conflicts detected: "You've got X tasks already on that date. That's a lot for one day—sure you can handle it?"
 
 **When a user wants to see their tasks:**
 - Use get_user_tasks for daily tasks
