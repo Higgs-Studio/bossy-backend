@@ -14,7 +14,7 @@ dependencies = [
   "psycopg-binary==3.3.2"
   
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 authors = [
   {name = "Pradyun Gedam", email = "pradyun@example.com"},
   {name = "Tzu-Ping Chung", email = "tzu-ping@example.com"},
@@ -35,7 +35,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.14"
+python = "^3.12"
 fastapi = "^0.104.1"
 twilio = "^8.10.0"
 python-dotenv = "^1.0.0"
