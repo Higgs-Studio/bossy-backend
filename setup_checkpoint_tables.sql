@@ -3,10 +3,9 @@
 -- ============================================================================
 -- This script sets up the necessary tables for LangGraph persistence.
 -- 
--- NOTE: The PostgresSaver.setup() method in app.py will automatically create
--- these tables when the application starts. This script is provided for
--- reference and manual setup if needed.
---
+-- IMPORTANT: This script MUST be run manually in Supabase SQL Editor.
+-- The custom SupabaseRESTCheckpointer uses REST API and cannot create tables.
+-- 
 -- Run this script in your Supabase SQL Editor:
 -- https://app.supabase.com/project/_/sql/new
 -- ============================================================================

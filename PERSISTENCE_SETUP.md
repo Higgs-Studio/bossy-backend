@@ -2,46 +2,46 @@
 
 ## Overview
 
-This application now includes conversation persistence for LangGraph, allowing the chatbot to maintain conversation history across sessions. Each user's conversation is stored in a PostgreSQL database (Supabase) and automatically loaded when they send a new message.
+This application now includes conversation persistence for LangGraph, allowing the chatbot to maintain conversation history across sessions. Each user's conversation is stored in Supabase using the **REST API** (not direct PostgreSQL connections), making it compatible with serverless deployments like Vercel.
 
 ## How It Works
 
 1. **Thread-based Persistence**: Each user's conversation is stored using a unique `thread_id` (defaults to `user_id`)
 2. **Automatic State Loading**: When a user sends a message, the previous conversation history is automatically loaded from the database
 3. **Checkpoint System**: LangGraph uses a checkpoint system to save conversation state after each interaction
+4. **REST API Based**: Uses Supabase REST API instead of direct PostgreSQL connections, making it compatible with Vercel and other serverless platforms
 
 ## Setup Instructions
 
 ### 1. Install Dependencies
 
-The required packages have been added to `requirements.txt`:
-- `langgraph-checkpoint-postgres==2.0.5`
-- `psycopg2-binary==2.9.10`
-
-Install them with:
+The required packages are already in `requirements.txt`. Install them with:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Supabase Database Connection
+**Note**: We use a custom `SupabaseRESTCheckpointer` that uses Supabase REST API, so no direct PostgreSQL connection libraries are needed.
 
-Add your Supabase PostgreSQL connection string to your `.env` file:
+### 2. Configure Supabase REST API
+
+Add your Supabase REST API credentials to your `.env` file:
 
 ```bash
-SUPABASE_DB_URI=postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_KEY=your_supabase_anon_key_here
 ```
 
-**How to get your connection string:**
+**How to get your credentials:**
 1. Go to your Supabase project dashboard
-2. Navigate to **Settings** → **Database**
-3. Find the **Connection string** section
-4. Copy the **URI** format connection string
-5. Replace `[YOUR-PASSWORD]` with your database password
-6. Replace `[YOUR-PROJECT-REF]` with your project reference ID
+2. Navigate to **Settings** → **API**
+3. Copy the **Project URL** (this is your `SUPABASE_URL`)
+4. Copy the **anon/public** key (this is your `SUPABASE_KEY`)
+
+**Important**: These are the same credentials used for other Supabase operations in the app. No separate database connection string is needed!
 
 ### 3. Database Tables Setup
 
-The checkpoint tables are automatically created when the application starts via `PostgresSaver.setup()`. However, you can also manually create them using the SQL script:
+The checkpoint tables need to be created manually in Supabase. Run the SQL script:
 
 ```bash
 # Run in Supabase SQL Editor
@@ -52,17 +52,24 @@ The script creates two main tables:
 - `checkpoints`: Stores conversation state checkpoints
 - `checkpoint_blobs`: Stores binary data associated with checkpoints
 
+**To run the script:**
+1. Go to your Supabase project dashboard
+2. Navigate to **SQL Editor**
+3. Create a new query
+4. Copy and paste the contents of `setup_checkpoint_tables.sql`
+5. Run the query
+
 ### 4. Verify Setup
 
 When you start the application, check the logs for:
 ```
-LangGraph Postgres checkpointer initialized successfully
+LangGraph Supabase REST checkpointer initialized successfully
 ```
 
 If you see a warning instead, check:
-- `SUPABASE_DB_URI` is set correctly in `.env`
-- Database credentials are valid
-- Network connectivity to Supabase database
+- `SUPABASE_URL` and `SUPABASE_KEY` are set correctly in `.env`
+- The checkpoint tables exist in your Supabase database
+- Your Supabase API key has the necessary permissions
 
 ## Usage
 
@@ -135,17 +142,26 @@ WHERE checkpoint->>'created_at' < NOW() - INTERVAL '30 days';
 
 ### Persistence Not Working
 
-1. **Check Environment Variable**: Ensure `SUPABASE_DB_URI` is set in `.env`
+1. **Check Environment Variables**: Ensure `SUPABASE_URL` and `SUPABASE_KEY` are set in `.env`
 2. **Check Logs**: Look for initialization messages in application logs
-3. **Verify Database Connection**: Test the connection string manually
-4. **Check Tables**: Verify `checkpoints` and `checkpoint_blobs` tables exist
+3. **Verify Tables**: Ensure `checkpoints` and `checkpoint_blobs` tables exist in Supabase
+4. **Test REST API**: Try querying the tables via Supabase dashboard to verify access
 
 ### Connection Errors
 
 If you see connection errors:
-- Verify the connection string format
-- Check that your Supabase database is accessible
-- Ensure your IP is whitelisted (if using connection pooling restrictions)
+- Verify `SUPABASE_URL` and `SUPABASE_KEY` are correct
+- Check that your Supabase API key has proper permissions
+- Ensure Row Level Security (RLS) policies allow access (see setup_checkpoint_tables.sql)
+- Verify the tables exist and have the correct schema
+
+### Vercel Deployment
+
+This implementation is **fully compatible with Vercel** because:
+- ✅ Uses Supabase REST API (no direct PostgreSQL connections)
+- ✅ No connection pooling issues
+- ✅ Works in serverless environments
+- ✅ No persistent connections required
 
 ### Memory Issues
 
@@ -163,14 +179,16 @@ process_message(user_message, user_id)
     ↓
 agent_graph.invoke(initial_state, config={"configurable": {"thread_id": user_id}})
     ↓
-PostgresSaver loads previous checkpoints for thread_id
+SupabaseRESTCheckpointer loads previous checkpoints via REST API
     ↓
 Agent processes with full conversation history
     ↓
-PostgresSaver saves new checkpoint
+SupabaseRESTCheckpointer saves new checkpoint via REST API
     ↓
 Response returned to user
 ```
+
+**Key Difference**: Uses Supabase REST API instead of direct PostgreSQL connections, making it compatible with serverless platforms.
 
 ## Benefits
 
