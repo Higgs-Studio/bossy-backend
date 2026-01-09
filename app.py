@@ -898,14 +898,13 @@ def send_whatsapp_message(to_number: str, message: str):
         message: The message text to send
     """
     try:
-        pass
-        # message_instance = client.messages.create(
-        #     body=message,
-        #     from_=TWILIO_PHONE,
-        #     to=to_number
-        # )
-        # logger.info(f"Message sent successfully. SID: {message_instance.sid}")
-        # return message_instance.sid
+        message_instance = client.messages.create(
+            body=message,
+            from_=TWILIO_PHONE,
+            to=to_number
+        )
+        logger.info(f"Message sent successfully. SID: {message_instance.sid}")
+        return message_instance.sid
     except Exception as e:
         logger.error(f"Error sending WhatsApp message: {e}")
         raise
