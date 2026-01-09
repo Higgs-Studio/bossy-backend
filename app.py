@@ -17,7 +17,7 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from supabase_checkpointer import SupabaseRESTCheckpointer
+from supabase_checkpointer import SupabaseCheckpointer
 
 load_dotenv()
 
@@ -45,17 +45,21 @@ MY_API_SECRET = os.getenv("MY_API_SECRET")
 
 logger = logging.getLogger(__name__)
 
-# Initialize LangGraph Supabase REST API Checkpointer for persistence
-checkpointer = None
-if SUPABASE_URL and SUPABASE_KEY:
+# Initialize LangGraph Supabase AsyncPostgresSaver Checkpointer for persistence
+# Note: The checkpointer will be initialized asynchronously when needed
+# We'll create a global instance that can be reused
+supabase_checkpointer: Optional[SupabaseCheckpointer] = None
+SUPABASE_DB_URI = os.getenv("SUPABASE_DB_URI")
+
+if SUPABASE_DB_URI:
     try:
-        checkpointer = SupabaseRESTCheckpointer(supabase)
-        checkpointer.setup()
-        logger.info("LangGraph Supabase REST checkpointer initialized successfully")
+        supabase_checkpointer = SupabaseCheckpointer(SUPABASE_DB_URI)
+        logger.info("Supabase checkpointer instance created (will be initialized async)")
     except Exception as e:
-        logger.warning(f"Failed to initialize LangGraph checkpointer: {e}. Persistence will be disabled.")
+        logger.warning(f"Failed to create Supabase checkpointer: {e}. Persistence will be disabled.")
+        supabase_checkpointer = None
 else:
-    logger.warning("SUPABASE_URL or SUPABASE_KEY not set. LangGraph persistence will be disabled.")
+    logger.warning("SUPABASE_DB_URI not set. LangGraph persistence will be disabled.")
 
 # async def get_api_key(api_key: str = Security(api_key_header)):
 #     """Validates the API Key from the header"""
@@ -527,8 +531,12 @@ class AgentState(TypedDict):
     user_id: str
 
 
-def create_agent_graph():
-    """Create and configure the LangGraph agent with tools."""
+def create_agent_graph(checkpointer=None):
+    """Create and configure the LangGraph agent with tools.
+    
+    Args:
+        checkpointer: Optional AsyncPostgresSaver checkpointer for persistence
+    """
     
     # Initialize LLM with DeepSeek API
     llm = ChatOpenAI(
@@ -808,11 +816,11 @@ End most task-setting messages with a clear expectation, e.g.:
         return workflow.compile()
 
 
-# Initialize the agent graph
-agent_graph = create_agent_graph()
+# Note: Agent graph will be created per-request with the checkpointer
+# This allows us to use async checkpointers properly
 
 
-def process_message(user_message: str, user_id: str = "default_user", thread_id: str = None) -> str:
+async def process_message(user_message: str, user_id: str = "default_user", thread_id: str = None) -> str:
     """
     Process incoming message using LangGraph agent with DeepSeek LLM.
     The agent can break down goals into tasks and manage them in Supabase.
@@ -841,9 +849,25 @@ def process_message(user_message: str, user_id: str = "default_user", thread_id:
             "user_id": user_id
         }
         
-        # Run the agent with config for persistence
-        # If checkpointer is enabled, this will load previous conversation history
-        result = agent_graph.invoke(initial_state, config=config)
+        # Get or create checkpointer connection
+        checkpointer_instance = None
+        if supabase_checkpointer:
+            checkpointer_instance = supabase_checkpointer.checkpointer
+            if not checkpointer_instance:
+                # Initialize connection if not already done
+                await supabase_checkpointer.setup_connection()
+                checkpointer_instance = supabase_checkpointer.checkpointer
+        
+        # Create agent graph with checkpointer
+        agent_graph = create_agent_graph(checkpointer=checkpointer_instance)
+        
+        # Run the agent with config for persistence (async if checkpointer is async)
+        if checkpointer_instance:
+            # Use ainvoke for async checkpointer
+            result = await agent_graph.ainvoke(initial_state, config=config)
+        else:
+            # Use invoke for sync (no checkpointer)
+            result = agent_graph.invoke(initial_state, config=config)
         
         # Extract the final response
         messages = result.get("messages", [])
@@ -860,7 +884,7 @@ def process_message(user_message: str, user_id: str = "default_user", thread_id:
         return "I processed your request. How else can I help you?"
         
     except Exception as e:
-        logger.error(f"Error in LangGraph agent: {e}")
+        logger.error(f"Error in LangGraph agent: {e}", exc_info=True)
         # Fallback to simple response
         return f"I'm having trouble processing that right now. Could you try rephrasing? (Error: {str(e)[:50]})"
 
@@ -874,19 +898,20 @@ def send_whatsapp_message(to_number: str, message: str):
         message: The message text to send
     """
     try:
-        message_instance = client.messages.create(
-            body=message,
-            from_=TWILIO_PHONE,
-            to=to_number
-        )
-        logger.info(f"Message sent successfully. SID: {message_instance.sid}")
-        return message_instance.sid
+        pass
+        # message_instance = client.messages.create(
+        #     body=message,
+        #     from_=TWILIO_PHONE,
+        #     to=to_number
+        # )
+        # logger.info(f"Message sent successfully. SID: {message_instance.sid}")
+        # return message_instance.sid
     except Exception as e:
         logger.error(f"Error sending WhatsApp message: {e}")
         raise
 
 
-def process_and_send_message(incoming_message: str, sender_number: str, user_id: str):
+async def process_and_send_message(incoming_message: str, sender_number: str, user_id: str):
     """
     Process a message asynchronously and send the response back via Twilio API.
     This function runs in a background task, allowing the webhook to return immediately.
@@ -899,8 +924,8 @@ def process_and_send_message(incoming_message: str, sender_number: str, user_id:
     try:
         logger.info(f"Processing message asynchronously for user {user_id}")
         
-        # Process the message through LangGraph agent
-        reply_text = process_message(incoming_message, user_id=user_id)
+        # Process the message through LangGraph agent (now async)
+        reply_text = await process_message(incoming_message, user_id=user_id)
         
         # Send response back via Twilio API
         send_whatsapp_message(sender_number, reply_text)
@@ -908,7 +933,7 @@ def process_and_send_message(incoming_message: str, sender_number: str, user_id:
         logger.info(f"Successfully processed and sent response to {sender_number}")
         
     except Exception as e:
-        logger.error(f"Error in async message processing: {e}")
+        logger.error(f"Error in async message processing: {e}", exc_info=True)
         # Try to send error message to user
         try:
             error_message = "Sorry, something went wrong while processing your message. Please try again later."

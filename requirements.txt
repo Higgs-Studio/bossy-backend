@@ -26,6 +26,8 @@ urllib3==2.6.2
 yarl==1.22.0
 supabase==2.27.0
 httpx==0.28.1
-langgraph==0.2.64
-langchain==0.3.18
-langchain-openai==0.2.11
+langgraph==1.0.5
+langchain==1.2.3
+langchain-openai==1.1.7
+langgraph-checkpoint-postgres==3.0.2
+psycopg[binary]==3.3.2
