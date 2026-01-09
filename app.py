@@ -17,6 +17,7 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.postgres import PostgresSaver
 
 load_dotenv()
 
@@ -43,6 +44,20 @@ MY_API_SECRET = os.getenv("MY_API_SECRET")
 # api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 logger = logging.getLogger(__name__)
+
+# Initialize LangGraph Postgres Checkpointer for persistence
+SUPABASE_DB_URI = os.getenv("SUPABASE_DB_URI")
+checkpointer = None
+if SUPABASE_DB_URI:
+    try:
+        checkpointer = PostgresSaver.from_conn_string(SUPABASE_DB_URI)
+        # Setup checkpoint tables (idempotent - safe to call multiple times)
+        checkpointer.setup()
+        logger.info("LangGraph Postgres checkpointer initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize LangGraph checkpointer: {e}. Persistence will be disabled.")
+else:
+    logger.warning("SUPABASE_DB_URI not set. LangGraph persistence will be disabled.")
 
 # async def get_api_key(api_key: str = Security(api_key_header)):
 #     """Validates the API Key from the header"""
@@ -787,34 +802,50 @@ End most task-setting messages with a clear expectation, e.g.:
     )
     workflow.add_edge("tools", "agent")
     
-    return workflow.compile()
+    # Compile with checkpointer if available (enables persistence)
+    if checkpointer:
+        return workflow.compile(checkpointer=checkpointer)
+    else:
+        logger.warning("Compiling graph without checkpointer - persistence disabled")
+        return workflow.compile()
 
 
 # Initialize the agent graph
 agent_graph = create_agent_graph()
 
 
-def process_message(user_message: str, user_id: str = "default_user") -> str:
+def process_message(user_message: str, user_id: str = "default_user", thread_id: str = None) -> str:
     """
     Process incoming message using LangGraph agent with DeepSeek LLM.
     The agent can break down goals into tasks and manage them in Supabase.
+    Conversation state is persisted using thread_id for memory across sessions.
     
     Args:
         user_message: The message from the user
         user_id: The user's ID (extracted from phone number or session)
+        thread_id: Optional thread ID for conversation persistence. If not provided, uses user_id.
         
     Returns:
         The agent's response as a string
     """
     try:
-        # Prepare initial state
+        # Use user_id as thread_id if not provided (each user has their own conversation thread)
+        if thread_id is None:
+            thread_id = user_id
+        
+        # Prepare config with thread_id for persistence
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Prepare initial state with new message
+        # If checkpointer is enabled, previous messages will be loaded automatically
         initial_state = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": user_id
         }
         
-        # Run the agent
-        result = agent_graph.invoke(initial_state)
+        # Run the agent with config for persistence
+        # If checkpointer is enabled, this will load previous conversation history
+        result = agent_graph.invoke(initial_state, config=config)
         
         # Extract the final response
         messages = result.get("messages", [])
