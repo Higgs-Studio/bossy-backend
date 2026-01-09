@@ -11,7 +11,7 @@ dependencies = [
   "langchain==0.3.18",
   "langchain-openai==0.2.11",
   "langgraph-checkpoint-postgres==2.0.5",
-  "psycopg2-binary==2.9.11"
+  "psycopg2-binary~=2.9.3",
 ]
 requires-python = ">=3.9"
 authors = [
@@ -44,7 +44,7 @@ langgraph = "0.2.64"
 langchain = "0.3.18"
 langchain-openai = "0.2.11"
 langgraph-checkpoint-postgres = "2.0.5"
-psycopg2-binary = "2.9.11"
+psycopg2-binary = "~2.9.3"
 
 [project.scripts]
 app = "app"
