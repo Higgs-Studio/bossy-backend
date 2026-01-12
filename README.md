@@ -10,6 +10,7 @@ An intelligent WhatsApp chatbot powered by **LangGraph** and **Ollama LLM (llama
 - 🗄️ **Supabase Storage**: All tasks stored securely in Supabase database
 - 🔧 **LangGraph Agent**: Intelligent routing and tool execution
 - 🦙 **Local LLM**: Uses Ollama for privacy and control
+- ⏰ **Automated Check-ins**: AI-powered contextual check-ins based on boss type (every 1-4 hours)
 
 ## 🚀 Quick Start
 
@@ -64,6 +65,7 @@ An intelligent WhatsApp chatbot powered by **LangGraph** and **Ollama LLM (llama
 - **[QUICKSTART.md](QUICKSTART.md)** - Step-by-step setup guide
 - **[LANGGRAPH_SETUP.md](LANGGRAPH_SETUP.md)** - Detailed technical documentation
 - **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Complete implementation details
+- **[CHECKIN_SETUP.md](CHECKIN_SETUP.md)** - Automated check-in feature setup
 
 ## 💡 Usage Examples
 
@@ -254,12 +256,16 @@ See [QUICKSTART.md](QUICKSTART.md) for more troubleshooting tips.
 
 ## 🚧 Roadmap
 
+### Recently Added
+- [x] Automated check-ins based on boss type
+- [x] Task update and deletion
+- [x] Task status updates via check-ins
+
 ### Coming Soon
-- [ ] Task update and deletion
 - [ ] Deadline tracking and reminders
-- [ ] Task status updates
 - [ ] Subtasks support
 - [ ] Team collaboration features
+- [ ] User timezone support for check-ins
 
 ### Future Enhancements
 - [ ] Multi-language support
@@ -267,6 +273,7 @@ See [QUICKSTART.md](QUICKSTART.md) for more troubleshooting tips.
 - [ ] Analytics dashboard
 - [ ] Recurring tasks
 - [ ] Task templates
+- [ ] Quiet hours for check-ins
 
 ## 📝 API Endpoints
 
@@ -275,6 +282,9 @@ Receives WhatsApp messages from Twilio
 
 ### `GET /tasks/{user_id}`
 Retrieves all tasks for a specific user
+
+### `POST /trigger-checkin`
+Triggers check-ins for all users due for check-in (called by cron job)
 
 ### `POST /send`
 Sends WhatsApp messages programmatically

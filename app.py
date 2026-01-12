@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import logging
 import httpx
 import json
+import random
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 from datetime import datetime, date, timedelta
 from difflib import SequenceMatcher
@@ -1351,6 +1352,210 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
         return f"I'm having trouble processing that right now. Could you try rephrasing? (Error: {str(e)[:50]})"
 
 
+def get_checkin_interval_hours(boss_type: str) -> int:
+    """
+    Get check-in interval in hours based on boss type.
+    
+    Args:
+        boss_type: The boss type (drill-sergeant, execution, supportive, mentor)
+        
+    Returns:
+        Number of hours between check-ins
+    """
+    intervals = {
+        "drill-sergeant": 1,
+        "execution": 2,
+        "supportive": 4,
+        "mentor": 4
+    }
+    return intervals.get(boss_type, 2)  # default to execution (2 hours)
+
+
+async def generate_checkin_message_with_context(user_id: str, boss_type: str) -> str:
+    """
+    Generate an AI-powered check-in message based on user's tasks and chat history.
+    Falls back to default messages if context cannot be retrieved.
+    
+    Args:
+        user_id: The user ID to fetch context for
+        boss_type: The boss type for personality
+        
+    Returns:
+        A personalized check-in message string
+    """
+    try:
+        # Get user's active goals and recent tasks
+        goals_result = supabase.table("goals").select("id, title, intensity, start_date, end_date").eq(
+            "user_id", user_id
+        ).eq("status", "active").order("created_at", desc=True).limit(3).execute()
+        
+        goals = goals_result.data if goals_result.data else []
+        
+        # Get recent tasks (last 7 days)
+        today = date.today()
+        week_ago = today - timedelta(days=7)
+        
+        tasks = []
+        if goals:
+            goal_ids = [g["id"] for g in goals]
+            tasks_result = supabase.table("daily_tasks").select(
+                "id, task_text, task_date"
+            ).in_("goal_id", goal_ids).gte(
+                "task_date", week_ago.isoformat()
+            ).order("task_date", desc=False).limit(10).execute()
+            
+            tasks = tasks_result.data if tasks_result.data else []
+        
+        # Get check-in status for recent tasks
+        task_statuses = []
+        if tasks:
+            task_ids = [t["id"] for t in tasks]
+            checkins_result = supabase.table("check_ins").select(
+                "task_id, status, created_at"
+            ).in_("task_id", task_ids).order("created_at", desc=True).limit(10).execute()
+            
+            checkins = checkins_result.data if checkins_result.data else []
+            checkins_by_task = {c["task_id"]: c["status"] for c in checkins}
+            
+            for task in tasks:
+                task_id = task["id"]
+                status = checkins_by_task.get(task_id, "pending")
+                task_statuses.append({
+                    "task": task["task_text"],
+                    "date": task["task_date"],
+                    "status": status
+                })
+        
+        # If we have context, generate AI message
+        if goals or tasks:
+            # Build context string
+            context_parts = []
+            
+            if goals:
+                goals_text = "\n".join([f"- {g['title']} (intensity: {g['intensity']})" for g in goals])
+                context_parts.append(f"Active Goals:\n{goals_text}")
+            
+            if task_statuses:
+                # Separate completed and pending tasks
+                completed = [t for t in task_statuses if t["status"] == "done"]
+                pending = [t for t in task_statuses if t["status"] == "pending"]
+                missed = [t for t in task_statuses if t["status"] == "missed"]
+                
+                if completed:
+                    completed_text = "\n".join([f"- {t['task']} ({t['date']})" for t in completed[:3]])
+                    context_parts.append(f"Recently Completed:\n{completed_text}")
+                
+                if pending:
+                    pending_text = "\n".join([f"- {t['task']} ({t['date']})" for t in pending[:3]])
+                    context_parts.append(f"Pending Tasks:\n{pending_text}")
+                
+                if missed:
+                    missed_text = "\n".join([f"- {t['task']} ({t['date']})" for t in missed[:2]])
+                    context_parts.append(f"Missed Tasks:\n{missed_text}")
+            
+            context = "\n\n".join(context_parts)
+            
+            # Personality prompts for AI generation
+            personality_styles = {
+                "drill-sergeant": """You're a drill sergeant - aggressive, demanding, no excuses. 
+Be direct and intense. Call out missed tasks harshly. Demand concrete progress reports.""",
+                
+                "execution": """You're results-driven and direct. Cut through the noise.
+Focus on what got done and what's next. Be firm but fair about accountability.""",
+                
+                "supportive": """You're supportive and encouraging, but still hold them accountable.
+Acknowledge their effort while checking on progress. Be warm but clear.""",
+                
+                "mentor": """You're a wise mentor who asks thoughtful questions.
+Help them reflect on their progress and learn. Be patient but persistent."""
+            }
+            
+            personality = personality_styles.get(boss_type, personality_styles["execution"])
+            
+            # Generate AI message
+            llm = ChatOpenAI(
+                model="deepseek-chat",
+                temperature=0.7,
+                base_url="https://api.deepseek.com",
+                api_key=os.getenv("DEEPSEEK_API_KEY")
+            )
+            
+            prompt = f"""You are a boss checking in with someone. Here's their current situation:
+
+{context}
+
+{personality}
+
+Generate a brief, natural check-in message (2-3 sentences max) that:
+1. References their specific goals or tasks
+2. Matches your personality style
+3. Prompts them to respond with their progress
+4. Uses 1-2 appropriate emojis
+
+Keep it conversational and direct. Don't be overly formal. This is a WhatsApp message.
+
+Generate ONLY the check-in message, nothing else:"""
+
+            response = llm.invoke([HumanMessage(content=prompt)])
+            ai_message = response.content.strip()
+            
+            # Validate the message isn't too long (WhatsApp has limits)
+            if len(ai_message) > 500:
+                ai_message = ai_message[:497] + "..."
+            
+            return ai_message
+        
+        # If no context, fall back to default messages
+        return generate_checkin_message_fallback(boss_type)
+        
+    except Exception as e:
+        logger.error(f"Error generating AI check-in message: {e}")
+        # Fall back to default messages on any error
+        return generate_checkin_message_fallback(boss_type)
+
+
+def generate_checkin_message_fallback(boss_type: str) -> str:
+    """
+    Generate a fallback check-in message based on boss type personality.
+    Used when AI generation fails or no context is available.
+    
+    Args:
+        boss_type: The boss type
+        
+    Returns:
+        A check-in message string
+    """
+    messages = {
+        "drill-sergeant": [
+            "Time to report in. What have you accomplished since we last talked? 💪",
+            "Check-in time. Give me your status update. Now. ⚡",
+            "Progress report. Don't tell me you've been slacking off. 🎯",
+            "Where are we at? I want concrete results, not excuses. 💥"
+        ],
+        "execution": [
+            "Quick check-in. What did you complete today? ✅",
+            "Time for a status update. Where are we at? 📊",
+            "Let's sync. What's your progress on today's tasks? 🎯",
+            "Check-in time. Show me what you've done. 💼"
+        ],
+        "supportive": [
+            "Hey! Just checking in. How are things going? 😊",
+            "Time for a friendly check-in. What have you been working on? 🌟",
+            "Checking in to see how you're doing. Any wins to share? 💪",
+            "Just wanted to see how your day is going. What's your progress? ✨"
+        ],
+        "mentor": [
+            "Let's reflect on your progress. What did you learn today? 🧠",
+            "Check-in time. What challenges did you face and how did you handle them? 💭",
+            "Time to review your journey. What insights have you gained? 🎓",
+            "Let's check in. What progress have you made toward your goals? 🌱"
+        ]
+    }
+    
+    boss_messages = messages.get(boss_type, messages["execution"])
+    return random.choice(boss_messages)
+
+
 def send_whatsapp_message(to_number: str, message: str):
     """
     Send a WhatsApp message using Twilio API.
@@ -1519,4 +1724,104 @@ async def get_tasks_by_user(user_id: str):
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching tasks: {str(e)}"
+        )
+
+
+@app.post("/trigger-checkin")
+async def trigger_checkin(background_tasks: BackgroundTasks):
+    """
+    Trigger check-ins for all users who are due for a check-in.
+    This endpoint should be called by a cron job on a regular schedule (e.g., every hour).
+    
+    The endpoint will:
+    1. Query all users whose next_checkin_at is in the past
+    2. Send them a check-in message based on their boss type
+    3. Update their next_checkin_at based on their boss type interval
+    
+    Returns:
+        JSON response with the number of check-ins triggered
+    """
+    try:
+        # Get current time
+        current_time = datetime.now()
+        
+        # Query users who are due for check-in
+        # next_checkin_at <= current_time
+        users_due = supabase.table("user_preferences").select(
+            "user_id, phone_no, boss_type, next_checkin_at, last_checkin_at"
+        ).lte("next_checkin_at", current_time.isoformat()).execute()
+        
+        if not users_due.data or len(users_due.data) == 0:
+            return {
+                "success": True,
+                "message": "No users due for check-in",
+                "checkins_triggered": 0,
+                "current_time": current_time.isoformat()
+            }
+        
+        checkins_triggered = 0
+        checkin_results = []
+        
+        for user_pref in users_due.data:
+            try:
+                user_id = user_pref.get("user_id")
+                phone_no = user_pref.get("phone_no")
+                boss_type = user_pref.get("boss_type", "execution")
+                
+                if not phone_no:
+                    logger.warning(f"User {user_id} has no phone number. Skipping check-in.")
+                    continue
+                
+                # Format phone number for WhatsApp
+                whatsapp_number = f"whatsapp:+{phone_no}"
+                
+                # Generate AI-powered check-in message based on user context
+                # Falls back to default messages if AI generation fails
+                checkin_message = await generate_checkin_message_with_context(user_id, boss_type)
+                
+                # Send check-in message in background
+                background_tasks.add_task(
+                    send_whatsapp_message,
+                    whatsapp_number,
+                    checkin_message
+                )
+                
+                # Calculate next check-in time based on boss type
+                interval_hours = get_checkin_interval_hours(boss_type)
+                next_checkin = current_time + timedelta(hours=interval_hours)
+                
+                # Update user preferences with new next_checkin_at and last_checkin_at
+                supabase.table("user_preferences").update({
+                    "next_checkin_at": next_checkin.isoformat(),
+                    "last_checkin_at": current_time.isoformat()
+                }).eq("user_id", user_id).execute()
+                
+                checkins_triggered += 1
+                checkin_results.append({
+                    "user_id": user_id,
+                    "phone_no": phone_no,
+                    "boss_type": boss_type,
+                    "next_checkin_at": next_checkin.isoformat(),
+                    "interval_hours": interval_hours
+                })
+                
+                logger.info(f"Check-in triggered for user {user_id} (boss_type: {boss_type}). Next check-in: {next_checkin}")
+                
+            except Exception as user_error:
+                logger.error(f"Error processing check-in for user {user_pref.get('user_id')}: {user_error}")
+                continue
+        
+        return {
+            "success": True,
+            "message": f"Check-ins triggered for {checkins_triggered} user(s)",
+            "checkins_triggered": checkins_triggered,
+            "current_time": current_time.isoformat(),
+            "results": checkin_results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error triggering check-ins: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering check-ins: {str(e)}"
         )
