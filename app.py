@@ -11,6 +11,7 @@ import httpx
 import json
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 from datetime import datetime, date, timedelta
+from difflib import SequenceMatcher
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import tool
@@ -73,6 +74,102 @@ else:
 # ============================================================================
 # LangGraph Tools for Task Management
 # ============================================================================
+
+def calculate_similarity(text1: str, text2: str) -> float:
+    """
+    Calculate similarity between two texts using SequenceMatcher.
+    Returns a value between 0.0 (completely different) and 1.0 (identical).
+    """
+    return SequenceMatcher(None, text1.lower().strip(), text2.lower().strip()).ratio()
+
+
+def find_similar_goals(goal_text: str, user_id: str, threshold: float = 0.7) -> List[Dict[str, Any]]:
+    """
+    Find similar existing goals for a user.
+    
+    Args:
+        goal_text: The goal text to check
+        user_id: The user ID
+        threshold: Similarity threshold (0.0 to 1.0), default 0.7
+        
+    Returns:
+        List of similar goals with similarity scores
+    """
+    try:
+        # Get all active goals for the user
+        goals_result = supabase.table("goals").select("id, title, intensity, status, created_at").eq("user_id", user_id).eq("status", "active").execute()
+        existing_goals = goals_result.data if goals_result.data else []
+        
+        similar_goals = []
+        for existing_goal in existing_goals:
+            existing_title = existing_goal.get("title", "")
+            similarity = calculate_similarity(goal_text, existing_title)
+            
+            if similarity >= threshold:
+                similar_goals.append({
+                    "goal": existing_goal,
+                    "similarity": similarity,
+                    "title": existing_title
+                })
+        
+        # Sort by similarity (highest first)
+        similar_goals.sort(key=lambda x: x["similarity"], reverse=True)
+        return similar_goals
+    except Exception as e:
+        logger.error(f"Error finding similar goals: {e}")
+        return []
+
+
+def find_similar_tasks(task_text: str, user_id: str, task_date: str = None, threshold: float = 0.7) -> List[Dict[str, Any]]:
+    """
+    Find similar existing tasks for a user.
+    
+    Args:
+        task_text: The task text to check
+        user_id: The user ID
+        task_date: Optional date to filter tasks (YYYY-MM-DD)
+        threshold: Similarity threshold (0.0 to 1.0), default 0.7
+        
+    Returns:
+        List of similar tasks with similarity scores
+    """
+    try:
+        # Get all active goals for the user
+        goals_result = supabase.table("goals").select("id").eq("user_id", user_id).eq("status", "active").execute()
+        goal_ids = [g["id"] for g in (goals_result.data if goals_result.data else [])]
+        
+        if not goal_ids:
+            return []
+        
+        # Get all tasks for these goals
+        tasks_query = supabase.table("daily_tasks").select("id, task_text, task_date, goal_id").in_("goal_id", goal_ids)
+        
+        if task_date:
+            tasks_query = tasks_query.eq("task_date", task_date)
+        
+        tasks_result = tasks_query.execute()
+        existing_tasks = tasks_result.data if tasks_result.data else []
+        
+        similar_tasks = []
+        for existing_task in existing_tasks:
+            existing_text = existing_task.get("task_text", "")
+            similarity = calculate_similarity(task_text, existing_text)
+            
+            if similarity >= threshold:
+                similar_tasks.append({
+                    "task": existing_task,
+                    "similarity": similarity,
+                    "task_text": existing_text,
+                    "task_date": existing_task.get("task_date")
+                })
+        
+        # Sort by similarity (highest first)
+        similar_tasks.sort(key=lambda x: x["similarity"], reverse=True)
+        return similar_tasks
+    except Exception as e:
+        logger.error(f"Error finding similar tasks: {e}")
+        return []
+
 
 @tool
 def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", start_date: str = None, end_date: str = None, boss_type: str = None) -> str:
@@ -139,6 +236,33 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
                         conflicts.append(overlap_msg)
                     else:
                         warnings.append(overlap_msg)
+        
+        # Check for similar goals before creating
+        similar_goals = find_similar_goals(goal, user_id, threshold=0.7)
+        
+        if similar_goals:
+            # Found similar goals - return confirmation request
+            similar_list = []
+            for sg in similar_goals[:3]:  # Show top 3 most similar
+                similar_list.append(f"- '{sg['title']}' ({(sg['similarity']*100):.0f}% similar)")
+            
+            return json.dumps({
+                "success": False,
+                "requires_confirmation": True,
+                "message": f"I found similar existing goals. Do you want to create a new goal anyway?",
+                "similar_goals": [sg["goal"] for sg in similar_goals[:3]],
+                "similarity_details": "\n".join(similar_list),
+                "new_goal": goal,
+                "action": "break_goal_into_tasks",
+                "action_params": {
+                    "goal": goal,
+                    "user_id": user_id,
+                    "intensity": intensity,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "boss_type": boss_type
+                }
+            })
         
         # If there are critical conflicts, return warning but allow creation
         conflict_info = {
@@ -294,7 +418,33 @@ def create_task_in_supabase(task_text: str, user_id: str, goal_id: str = None, t
         elif len(all_tasks_on_date) >= 3:
             warnings.append(f"You have {len(all_tasks_on_date)} other tasks scheduled for {task_date}. Make sure you can handle them all.")
         
-        # Check for similar tasks on the same date
+        # Check for similar tasks using better similarity algorithm
+        similar_tasks = find_similar_tasks(task_text, user_id, task_date=task_date, threshold=0.7)
+        
+        if similar_tasks:
+            # Found similar tasks - return confirmation request
+            similar_list = []
+            for st in similar_tasks[:3]:  # Show top 3 most similar
+                task_date_str = st.get("task_date", "unknown date")
+                similar_list.append(f"- '{st['task_text']}' on {task_date_str} ({(st['similarity']*100):.0f}% similar)")
+            
+            return json.dumps({
+                "success": False,
+                "requires_confirmation": True,
+                "message": f"I found similar existing tasks. Do you want to create a new task anyway?",
+                "similar_tasks": [st["task"] for st in similar_tasks[:3]],
+                "similarity_details": "\n".join(similar_list),
+                "new_task": task_text,
+                "action": "create_task_in_supabase",
+                "action_params": {
+                    "task_text": task_text,
+                    "user_id": user_id,
+                    "goal_id": goal_id,
+                    "task_date": task_date
+                }
+            })
+        
+        # Check for similar tasks on the same date (legacy check for warnings)
         task_lower = task_text.lower()
         for existing_task in all_tasks_on_date:
             existing_text = existing_task.get("task_text", "").lower()
@@ -489,6 +639,182 @@ def create_boss_event(user_id: str, event_type: str, context: Dict[str, Any] = N
 
 
 @tool
+def confirm_and_create_goal(goal: str, user_id: str, intensity: str = "medium", start_date: str = None, end_date: str = None, boss_type: str = None) -> str:
+    """
+    Confirm and create a goal after user approval. This is called when user confirms they want to create a goal despite similar ones existing.
+    This bypasses the similarity check and creates the goal directly.
+    
+    Args:
+        goal: The high-level goal or objective to break down
+        user_id: The user ID (UUID) who owns this goal
+        intensity: Goal intensity - "low", "medium", or "high" (default: "medium")
+        start_date: Start date in YYYY-MM-DD format (default: today)
+        end_date: End date in YYYY-MM-DD format (default: 30 days from start)
+        boss_type: Boss type (optional)
+        
+    Returns:
+        A JSON string containing the goal and tasks created
+    """
+    try:
+        # Get boss_type from user_preferences if not provided
+        if not boss_type:
+            try:
+                pref_result = supabase.table("user_preferences").select("boss_type").eq("user_id", user_id).execute()
+                if pref_result.data and len(pref_result.data) > 0:
+                    boss_type = pref_result.data[0].get("boss_type", "execution")
+                else:
+                    boss_type = "execution"
+            except:
+                boss_type = "execution"
+        
+        # Set default dates if not provided
+        if not start_date:
+            start_date = date.today().isoformat()
+        if not end_date:
+            start = date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
+            end_date = (start + timedelta(days=30)).isoformat()
+        
+        # Create the goal directly (skip similarity check since user confirmed)
+        goal_data = {
+            "user_id": user_id,
+            "title": goal,
+            "intensity": intensity,
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": "active",
+            "boss_type": boss_type
+        }
+        
+        goal_result = supabase.table("goals").insert(goal_data).execute()
+        if not goal_result.data:
+            return json.dumps({
+                "success": False,
+                "error": "Failed to create goal"
+            })
+        
+        goal_id = goal_result.data[0]["id"]
+        
+        # Use LLM to break down the goal into tasks
+        llm = ChatOpenAI(
+            model="deepseek-chat",
+            temperature=0.7,
+            base_url="https://api.deepseek.com",
+            api_key=os.getenv("DEEPSEEK_API_KEY")
+        )
+        
+        next_day = (date.fromisoformat(start_date) + timedelta(days=1)).isoformat()
+        
+        prompt = f"""You are a task planning assistant. Break down the following goal into 3-5 specific, actionable daily tasks.
+        
+Goal: {goal}
+Start Date: {start_date}
+End Date: {end_date}
+
+Return ONLY a JSON array of tasks, where each task has:
+- task_text: A clear, concise task description (max 200 chars)
+- task_date: A date in YYYY-MM-DD format (should be between {start_date} and {end_date})
+
+Example format:
+[
+  {{"task_text": "Research options and create initial list", "task_date": "{start_date}"}},
+  {{"task_text": "Create detailed implementation plan", "task_date": "{next_day}"}}
+]
+
+Return ONLY the JSON array, no other text."""
+
+        response = llm.invoke([HumanMessage(content=prompt)])
+        tasks_json = response.content.strip()
+        
+        # Parse and validate JSON
+        tasks = json.loads(tasks_json)
+        
+        # Store daily_tasks in Supabase
+        created_tasks = []
+        for task in tasks:
+            task_data = {
+                "goal_id": goal_id,
+                "task_date": task.get("task_date", start_date),
+                "task_text": task.get("task_text", "Untitled Task")
+            }
+            
+            result = supabase.table("daily_tasks").insert(task_data).execute()
+            created_tasks.append(result.data[0] if result.data else task_data)
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Created goal '{goal}' with {len(created_tasks)} daily tasks",
+            "goal": goal_result.data[0],
+            "tasks": created_tasks
+        })
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing error: {e}")
+        return json.dumps({
+            "success": False,
+            "error": "Failed to parse task breakdown from AI"
+        })
+    except Exception as e:
+        logger.error(f"Error creating confirmed goal: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def confirm_and_create_task(task_text: str, user_id: str, goal_id: str = None, task_date: str = None) -> str:
+    """
+    Confirm and create a task after user approval. This is called when user confirms they want to create a task despite similar ones existing.
+    This bypasses the similarity check and creates the task directly.
+    
+    Args:
+        task_text: The task description/text
+        user_id: The user ID (UUID) who owns this task
+        goal_id: The goal ID (UUID) to link this task to (optional, uses most recent active goal if not provided)
+        task_date: Task date in YYYY-MM-DD format (default: today)
+        
+    Returns:
+        A JSON string with the created task details
+    """
+    try:
+        # If goal_id not provided, get the most recent active goal for the user
+        if not goal_id:
+            goal_result = supabase.table("goals").select("id").eq("user_id", user_id).eq("status", "active").order("created_at", desc=True).limit(1).execute()
+            if not goal_result.data or len(goal_result.data) == 0:
+                return json.dumps({
+                    "success": False,
+                    "error": "No active goal found. Please create a goal first."
+                })
+            goal_id = goal_result.data[0]["id"]
+        
+        # Set default task_date to today if not provided
+        if not task_date:
+            task_date = date.today().isoformat()
+        
+        # Create the task directly (skip similarity check since user confirmed)
+        task_data = {
+            "goal_id": goal_id,
+            "task_date": task_date,
+            "task_text": task_text
+        }
+        
+        result = supabase.table("daily_tasks").insert(task_data).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Task '{task_text}' created successfully",
+            "task": result.data[0] if result.data else task_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating confirmed task: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
 def get_user_goals(user_id: str, status: str = "all") -> str:
     """
     Retrieve goals for a specific user from Supabase.
@@ -522,6 +848,113 @@ def get_user_goals(user_id: str, status: str = "all") -> str:
         })
 
 
+@tool
+def delete_goal(goal_id: str, user_id: str, delete_tasks: bool = True) -> str:
+    """
+    Delete a goal and optionally its associated tasks from Supabase.
+    
+    Args:
+        goal_id: The goal ID (UUID) to delete
+        user_id: The user ID (UUID) who owns this goal (for verification)
+        delete_tasks: Whether to also delete all tasks associated with this goal (default: True)
+        
+    Returns:
+        A JSON string with the deletion result
+    """
+    try:
+        # First verify the goal belongs to the user
+        goal_result = supabase.table("goals").select("id, title, user_id").eq("id", goal_id).eq("user_id", user_id).execute()
+        
+        if not goal_result.data or len(goal_result.data) == 0:
+            return json.dumps({
+                "success": False,
+                "error": "Goal not found or you don't have permission to delete it"
+            })
+        
+        goal_title = goal_result.data[0].get("title", "Unknown")
+        deleted_tasks_count = 0
+        
+        # Delete associated tasks if requested
+        if delete_tasks:
+            tasks_result = supabase.table("daily_tasks").select("id").eq("goal_id", goal_id).execute()
+            task_ids = [t["id"] for t in (tasks_result.data if tasks_result.data else [])]
+            
+            if task_ids:
+                # Delete all tasks for this goal
+                for task_id in task_ids:
+                    supabase.table("daily_tasks").delete().eq("id", task_id).execute()
+                deleted_tasks_count = len(task_ids)
+        
+        # Delete the goal
+        supabase.table("goals").delete().eq("id", goal_id).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Goal '{goal_title}' deleted successfully",
+            "goal_id": goal_id,
+            "deleted_tasks_count": deleted_tasks_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error deleting goal: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def delete_task(task_id: str, user_id: str) -> str:
+    """
+    Delete a single task from Supabase.
+    
+    Args:
+        task_id: The task ID (UUID) to delete
+        user_id: The user ID (UUID) who owns this task (for verification)
+        
+    Returns:
+        A JSON string with the deletion result
+    """
+    try:
+        # First verify the task belongs to the user by checking through the goal
+        # Get the task and its associated goal
+        task_result = supabase.table("daily_tasks").select("id, task_text, goal_id").eq("id", task_id).execute()
+        
+        if not task_result.data or len(task_result.data) == 0:
+            return json.dumps({
+                "success": False,
+                "error": "Task not found"
+            })
+        
+        task_text = task_result.data[0].get("task_text", "Unknown")
+        goal_id = task_result.data[0].get("goal_id")
+        
+        # Verify the goal belongs to the user
+        goal_result = supabase.table("goals").select("id, user_id").eq("id", goal_id).eq("user_id", user_id).execute()
+        
+        if not goal_result.data or len(goal_result.data) == 0:
+            return json.dumps({
+                "success": False,
+                "error": "Task not found or you don't have permission to delete it"
+            })
+        
+        # Delete the task
+        supabase.table("daily_tasks").delete().eq("id", task_id).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Task '{task_text}' deleted successfully",
+            "task_id": task_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Error deleting task: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
 # ============================================================================
 # LangGraph State and Agent Setup
 # ============================================================================
@@ -549,11 +982,15 @@ def create_agent_graph(checkpointer=None):
     # Bind tools to LLM
     tools = [
         break_goal_into_tasks, 
-        create_task_in_supabase, 
+        create_task_in_supabase,
+        confirm_and_create_goal,
+        confirm_and_create_task,
         get_user_tasks,
         create_check_in,
         create_boss_event,
-        get_user_goals
+        get_user_goals,
+        delete_goal,
+        delete_task
     ]
     llm_with_tools = llm.bind_tools(tools)
     
@@ -613,30 +1050,49 @@ Boss type: {boss_type}
 
 **When a user mentions a goal or project:**
 - Use break_goal_into_tasks to create the goal and daily tasks
+- IMPORTANT: If the response contains "requires_confirmation": true, it means similar goals were found
+- When similar goals are found, show them to the user and ask for confirmation
+- Example: "I found similar goals: [list them]. Do you want to create a new one anyway? (yes/no)"
+- If user confirms (yes/yep/sure/go ahead), use confirm_and_create_goal with the same parameters
+- If user declines (no/nope/cancel), acknowledge and don't create the goal
 - Check the response for conflict_info - if there are warnings or conflicts, mention them to the user
 - If there are conflicts (especially high-intensity goal overlaps), warn the user but let them decide
 - Respond naturally about what you're setting up
 - Don't just list tasks—talk about them like a boss would
-- Example: "Alright, let's break this down. I'm setting up your goal and here's what you're doing today..."
-- If conflicts detected: "Heads up—you've already got X high-intensity goals running. This might be a lot to handle. Still want to proceed?"
+- Example: "Alright, let's break this down 🎯 I'm setting up your goal and here's what you're doing today..."
+- If conflicts detected: "Heads up ⚠️ You've already got X high-intensity goals running. This might be a lot to handle. Still want to proceed?"
 
 **When a user wants to create a single task:**
 - Use create_task_in_supabase (links to their most recent active goal)
+- IMPORTANT: If the response contains "requires_confirmation": true, it means similar tasks were found
+- When similar tasks are found, show them to the user and ask for confirmation
+- Example: "I found similar tasks: [list them]. Do you want to create a new one anyway? (yes/no)"
+- If user confirms (yes/yep/sure/go ahead), use confirm_and_create_task with the same parameters
+- If user declines (no/nope/cancel), acknowledge and don't create the task
 - Check the response for conflict_info - if there are warnings about too many tasks on a date, mention it
-- Acknowledge it naturally: "Got it. Added that to your list."
-- If conflicts detected: "You've got X tasks already on that date. That's a lot for one day—sure you can handle it?"
+- Acknowledge it naturally: "Got it ✅ Added that to your list."
+- If conflicts detected: "You've got X tasks already on that date ⚠️ That's a lot for one day—sure you can handle it?"
 
 **When a user wants to see their tasks:**
 - Use get_user_tasks for daily tasks
 - Use get_user_goals for goals
 - Present them conversationally, not like a database dump
-- Example: "Here's what you've got on your plate..." or "You've got 3 tasks coming up..."
+- Example: "Here's what you've got on your plate 📋" or "You've got 3 tasks coming up 🎯"
+
+**When a user wants to delete a goal or task:**
+- If user wants to delete a goal: Use delete_goal with goal_id and user_id
+- If user wants to delete a task: Use delete_task with task_id and user_id
+- If user mentions goal/task by name, first use get_user_goals or get_user_tasks to find the ID
+- Confirm deletion if it's a significant goal or has many tasks
+- For goals: By default, delete_tasks=True will also delete all associated tasks (mention this)
+- Example: "Deleting goal '[title]' and its [X] tasks 🗑️" or "Task '[text]' removed ✅"
+- If deletion fails, explain why (not found, permission issue, etc.)
 
 **When a user completes or misses a task:**
 - Use create_check_in with status "done" or "missed"
 - Respond like a real boss would—acknowledge completion, address misses directly
-- Completed: "Good. What's next?" or "Done. Moving on."
-- Missed: "What happened?" Get the reason. Then: "Alright, here's what we're doing instead..."
+- Completed: "Good ✅ What's next?" or "Done. Moving on 💪"
+- Missed: "What happened? ⚠️" Get the reason. Then: "Alright, here's what we're doing instead..."
 
 **When you need to provide feedback:**
 - Use create_boss_event for praise, warning, or escalation
@@ -652,23 +1108,29 @@ Boss type: {boss_type}
 
 When someone sets a goal:
 Turn it into action immediately. Break it down. Set the first task for today. 
-Don't ask permission—just do it. Say something like "Alright, let's break this down. First thing you're doing today is..."
+Don't ask permission—just do it. Say something like "Alright, let's break this down 🎯 First thing you're doing today is..."
 
 When someone checks in:
-- Completed: "Good. What's next?" or "Done. Moving on."
-- Missed: "What happened?" Get the reason. Then: "Alright, here's what we're doing instead..."
-- Vague: "That's not an answer. Did you do it or not?"
+- Completed: "Good ✅ What's next?" or "Done. Moving on 💪"
+- Missed: "What happened? ⚠️" Get the reason. Then: "Alright, here's what we're doing instead..."
+- Vague: "That's not an answer. Did you do it or not? 🤔"
 
 When someone misses repeatedly:
 - 2 misses: "We need to talk. This isn't working."
 - 3+ misses: "Look, we've been here before. This is a pattern, not a one-off. What's really going on?"
+
+**Emoji Usage:**
+- Use emojis naturally and appropriately to add personality and emphasis
+- Use emojis to convey tone: ✅ for completion, ⚠️ for warnings, 🎯 for goals, 📋 for tasks, 💪 for motivation
+- Don't overuse emojis—1-2 per message is usually enough
+- Match emoji to context: serious situations get fewer/no emojis, casual check-ins can have more
+- Examples: "Got it ✅", "Heads up ⚠️", "Let's go 💪", "Here's your list 📋"
 
 **What you NEVER do:**
 - Sound like a customer service bot
 - Use phrases like "I'm here to help" or "How can I assist you today"
 - Be overly formal or corporate
 - Apologize for holding people accountable
-- Use emojis (you're a boss, not a friend)
 
 **WhatsApp style:**
 Keep messages short and punchy. One thought per message when possible. 
@@ -761,11 +1223,11 @@ Default Closing Line
 
 End most task-setting messages with a clear expectation, e.g.:
 
-“Report back once complete.”
+"Report back once complete ✅"
 
-“Check-in required today.”
+"Check-in required today 📋"
 
-“Execution starts now.”
+"Execution starts now 💪"
 
 """)
         
