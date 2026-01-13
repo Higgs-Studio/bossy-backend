@@ -109,7 +109,7 @@ For each user:
 
 ### Tested Combinations
 
-| Boss Type | en | zh-TW | zh-CN | yue |
+| Boss Type | en | zh-TW | zh-CN | zh-HK |
 |-----------|:--:|:-----:|:-----:|:---:|
 | Execution | ✅ | ✅ | ✅ | ✅ |
 | Supportive | ✅ | ✅ | ✅ | ✅ |
@@ -245,7 +245,7 @@ WHERE phone_no LIKE '86%';
 
 -- Cantonese for casual Hong Kong users
 UPDATE user_preferences 
-SET boss_language = 'yue' 
+SET boss_language = 'zh-HK' 
 WHERE user_id IN (SELECT user_id FROM casual_users);
 ```
 

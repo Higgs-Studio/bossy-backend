@@ -17,7 +17,7 @@ The AI Boss chatbot now supports **4 languages** to communicate with users in th
 | `en` | English | English | Default language |
 | `zh-TW` | Traditional Chinese | 繁體中文 | Hong Kong, Taiwan |
 | `zh-CN` | Simplified Chinese | 简体中文 | Mainland China, Singapore |
-| `yue` | Cantonese | 廣東話 | Hong Kong, Guangdong |
+| `zh-HK` | Cantonese | 廣東話 | Hong Kong, Guangdong |
 
 ---
 
@@ -32,7 +32,7 @@ Added `boss_language` field to `user_preferences` table:
 ```sql
 ALTER TABLE user_preferences 
 ADD COLUMN IF NOT EXISTS boss_language TEXT DEFAULT 'en'
-CHECK (boss_language IN ('en', 'zh-TW', 'zh-CN', 'yue'));
+CHECK (boss_language IN ('en', 'zh-TW', 'zh-CN', 'zh-HK'));
 ```
 
 ### 2. Language Prompts Module
@@ -284,7 +284,7 @@ python test_agent.py
 - [ ] English (en) - Agent responds in English
 - [ ] Traditional Chinese (zh-TW) - Agent responds in 繁體中文
 - [ ] Simplified Chinese (zh-CN) - Agent responds in 简体中文
-- [ ] Cantonese (yue) - Agent responds in 廣東話
+- [ ] Cantonese (zh-HK) - Agent responds in 廣東話
 - [ ] Check-in messages respect language preference
 - [ ] System prompts include language instructions
 - [ ] AI-generated messages are in correct language

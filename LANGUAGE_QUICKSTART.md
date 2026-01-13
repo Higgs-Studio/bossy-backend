@@ -13,7 +13,7 @@ The AI Boss chatbot now speaks **4 languages**! Set your preference and the bot 
 | `en` | English | English |
 | `zh-TW` | Traditional Chinese | 繁體中文 |
 | `zh-CN` | Simplified Chinese | 简体中文 |
-| `yue` | Cantonese | 廣東話 |
+| `zh-HK` | Cantonese | 廣東話 |
 
 ---
 
@@ -68,7 +68,7 @@ UPDATE user_preferences SET boss_language = 'zh-TW' WHERE user_id = 'user-123';
 UPDATE user_preferences SET boss_language = 'zh-CN' WHERE user_id = 'user-123';
 
 -- Cantonese (Hong Kong colloquial)
-UPDATE user_preferences SET boss_language = 'yue' WHERE user_id = 'user-123';
+UPDATE user_preferences SET boss_language = 'zh-HK' WHERE user_id = 'user-123';
 ```
 
 ### View Language Distribution
@@ -122,7 +122,7 @@ WHERE boss_language = 'zh-TW';
 ### Simplified Chinese (zh-CN)
 > "快速签到。你今天完成了什么？✅"
 
-### Cantonese (yue)
+### Cantonese (zh-HK)
 > "快速簽到。你今日完成咗乜？✅"
 
 ---
@@ -144,13 +144,13 @@ WHERE boss_language = 'zh-TW';
 - Singapore users
 - Simplified character set
 
-### Cantonese (yue)
+### Cantonese (zh-HK)
 - Hong Kong users (colloquial)
 - Guangdong users
 - More casual, street-style language
 - Uses Cantonese-specific phrases
 
-**Tip:** For Hong Kong users, you can choose between `zh-TW` (formal) and `yue` (casual) based on their preference.
+**Tip:** For Hong Kong users, you can choose between `zh-TW` (formal) and `zh-HK` (casual) based on their preference.
 
 ---
 
@@ -207,7 +207,7 @@ A: No. The DeepSeek LLM already supports all these languages.
 **Q: What happens if language is not set?**  
 A: Defaults to English (`en`).
 
-**Q: Can I use both zh-TW and yue for the same user?**  
+**Q: Can I use both zh-TW and zh-HK for the same user?**  
 A: Choose one. They can change it anytime.
 
 ---

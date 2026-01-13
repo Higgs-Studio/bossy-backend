@@ -2,7 +2,7 @@
 Multi-Language Prompt Support Module
 
 This module provides language-specific prompts and messages for the AI boss chatbot.
-Supports: English (en), Traditional Chinese (zh-TW), Simplified Chinese (zh-CN), Cantonese (yue)
+Supports: English (en), Traditional Chinese (zh-TW), Simplified Chinese (zh-CN), Cantonese (zh-HK)
 """
 
 from typing import Dict, Any
@@ -63,7 +63,7 @@ Your tone is aggressive and confrontational. You break people down to build them
 直接指出弱点。你激进、毫不妥协、不屈不挠。
 你的语气咄咄逼人且对抗。你打倒人们然后重建他们。不纵容，不扶持。"""
     },
-    "yue": {
+    "zh-HK": {
         "execution": """你係一個注重結果嘅老細，直接了當。你講嘢直接，唔會轉彎抹角。
 你在意結果，唔係感受。當有人承諾咗，你就會要佢哋負責。就係咁。
 你嘅語氣堅定但公平。你唔會講好聽說話。一旦承諾咗就唔會傾。""",
@@ -145,7 +145,7 @@ Language: {language}
 - 直接但有人情味。坚定但亲切。
 - 只用{language_name}回应。所有回应都必须是{language_name}。""",
 
-    "yue": """你係一個真實嘅老細，負責監督某人嘅責任。你係人，唔係機器人。
+    "zh-HK": """你係一個真實嘅老細，負責監督某人嘅責任。你係人，唔係機器人。
 
 {personality}
 
@@ -311,7 +311,7 @@ ACTION_INSTRUCTIONS = {
 - 完成：「好 ✅ 下一步是什么？」或「完成了。继续前进 💪」
 - 错过：「发生什么事了？⚠️」 获取原因。然后：「好吧，我们改做这个...」"""
     },
-    "yue": {
+    "zh-HK": {
         "goal_creation": """**當用戶提到目標或項目時：**
 - 用 break_goal_into_tasks 創建目標同每日任務
 - 重要：如果回應包含 "requires_confirmation": true，即係搵到類似嘅目標
@@ -383,7 +383,7 @@ CORE_PRINCIPLES = {
 - 会有失误。但模式不会被忽视。
 - 承诺就是承诺。一旦设定，就是真的。""",
 
-    "yue": """**核心原則：**
+    "zh-HK": """**核心原則：**
 - 執行勝於意圖。做畀我睇，唔好淨係講。
 - 持續勝過完美。完成好過完美。
 - 會有失誤。但模式唔會畀人忽視。
@@ -473,7 +473,7 @@ CHECKIN_MESSAGES = {
             "让我们签到一下。你朝着目标取得了什么进展？🌱"
         ]
     },
-    "yue": {
+    "zh-HK": {
         "drill-sergeant": [
             "報告時間。自從上次傾偈之後你完成咗乜？💪",
             "簽到時間。畀我你嘅狀態更新。而家。⚡",
@@ -605,7 +605,7 @@ Generate ONLY the check-in message in English, nothing else:"""
 
 只生成简体中文的签到消息，其他什么都不要："""
     },
-    "yue": {
+    "zh-HK": {
         "first_ping": """你係一個喺新一日開始時問候某人嘅老細。呢個係佢哋目前嘅情況：
 
 {context}
@@ -648,7 +648,7 @@ LANGUAGE_NAMES = {
     "en": "English",
     "zh-TW": "繁體中文",
     "zh-CN": "简体中文",
-    "yue": "廣東話"
+    "zh-HK": "廣東話"
 }
 
 def get_personality_prompt(boss_type: str, language: str = "en") -> str:

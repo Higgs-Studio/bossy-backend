@@ -8,17 +8,17 @@
 -- - en: English
 -- - zh-TW: Traditional Chinese (繁體中文)
 -- - zh-CN: Simplified Chinese (简体中文)
--- - yue: Cantonese (廣東話)
+-- - zh-HK: Cantonese (廣東話)
 -- ============================================================================
 
 -- Add boss_language field to user_preferences table
 ALTER TABLE user_preferences 
 ADD COLUMN IF NOT EXISTS boss_language TEXT DEFAULT 'en'
-CHECK (boss_language IN ('en', 'zh-TW', 'zh-CN', 'yue'));
+CHECK (boss_language IN ('en', 'zh-TW', 'zh-CN', 'zh-HK'));
 
 -- Add comment to explain the field
 COMMENT ON COLUMN user_preferences.boss_language IS 
-'Language preference for AI boss communication: en (English), zh-TW (Traditional Chinese), zh-CN (Simplified Chinese), yue (Cantonese)';
+'Language preference for AI boss communication: en (English), zh-TW (Traditional Chinese), zh-CN (Simplified Chinese), zh-HK (Cantonese)';
 
 -- Create index for efficient querying by language
 CREATE INDEX IF NOT EXISTS idx_user_preferences_language 
@@ -34,7 +34,7 @@ BEGIN
         WHEN 'en' THEN 'English'
         WHEN 'zh-TW' THEN '繁體中文'
         WHEN 'zh-CN' THEN '简体中文'
-        WHEN 'yue' THEN '廣東話'
+        WHEN 'zh-HK' THEN '廣東話'
         ELSE 'English'  -- default
     END;
 END;
