@@ -1371,7 +1371,7 @@ def get_checkin_interval_hours(boss_type: str) -> int:
     return intervals.get(boss_type, 2)  # default to execution (2 hours)
 
 
-async def generate_checkin_message_with_context(user_id: str, boss_type: str) -> str:
+async def generate_checkin_message_with_context(user_id: str, boss_type: str, last_checkin_at: str = None) -> str:
     """
     Generate an AI-powered check-in message based on user's tasks and chat history.
     Falls back to default messages if context cannot be retrieved.
@@ -1379,11 +1379,23 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str) ->
     Args:
         user_id: The user ID to fetch context for
         boss_type: The boss type for personality
+        last_checkin_at: The last checkin timestamp (ISO format)
         
     Returns:
         A personalized check-in message string
     """
     try:
+        # Check if this is the first ping of the day
+        is_first_ping_today = False
+        if last_checkin_at:
+            try:
+                last_checkin_date = datetime.fromisoformat(last_checkin_at.replace('Z', '+00:00')).date()
+                today = date.today()
+                is_first_ping_today = last_checkin_date < today
+            except Exception as e:
+                logger.warning(f"Could not parse last_checkin_at: {e}")
+                is_first_ping_today = False
+        
         # Get user's active goals and recent tasks
         goals_result = supabase.table("goals").select("id, title, intensity, start_date, end_date").eq(
             "user_id", user_id
@@ -1480,7 +1492,25 @@ Help them reflect on their progress and learn. Be patient but persistent."""
                 api_key=os.getenv("DEEPSEEK_API_KEY")
             )
             
-            prompt = f"""You are a boss checking in with someone. Here's their current situation:
+            # Different prompts for first ping of the day vs regular check-ins
+            if is_first_ping_today:
+                prompt = f"""You are a boss greeting someone at the start of a new day. Here's their current situation:
+
+{context}
+
+{personality}
+
+Generate a brief, natural greeting message (2-3 sentences max) that:
+1. Greets them for the new day (Good morning, Ready to tackle today, etc.)
+2. Highlights the priority tasks for today they should focus on
+3. Matches your personality style
+4. Uses 1-2 appropriate emojis
+
+Keep it conversational and direct. Don't be overly formal. This is a WhatsApp message.
+
+Generate ONLY the greeting message, nothing else:"""
+            else:
+                prompt = f"""You are a boss checking in with someone. Here's their current situation:
 
 {context}
 
@@ -1767,6 +1797,7 @@ async def trigger_checkin(background_tasks: BackgroundTasks):
                 user_id = user_pref.get("user_id")
                 phone_no = user_pref.get("phone_no")
                 boss_type = user_pref.get("boss_type", "execution")
+                last_checkin_at = user_pref.get("last_checkin_at")
                 
                 if not phone_no:
                     logger.warning(f"User {user_id} has no phone number. Skipping check-in.")
@@ -1777,7 +1808,7 @@ async def trigger_checkin(background_tasks: BackgroundTasks):
                 
                 # Generate AI-powered check-in message based on user context
                 # Falls back to default messages if AI generation fails
-                checkin_message = await generate_checkin_message_with_context(user_id, boss_type)
+                checkin_message = await generate_checkin_message_with_context(user_id, boss_type, last_checkin_at)
                 
                 # Send check-in message in background
                 background_tasks.add_task(
