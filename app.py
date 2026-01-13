@@ -20,6 +20,13 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from supabase_checkpointer import SupabaseCheckpointer
+from language_prompts import (
+    get_system_prompt,
+    get_checkin_message,
+    get_checkin_ai_prompt,
+    get_personality_prompt,
+    get_language_name
+)
 
 load_dotenv()
 
@@ -1000,147 +1007,22 @@ def create_agent_graph(checkpointer=None):
         messages = state["messages"]
         user_id = state.get("user_id", "unknown")
         
-        # Get user's boss_type preference to personalize the personality
+        # Get user's boss_type and boss_language preferences
         boss_type = "execution"  # default
+        boss_language = "en"  # default
         try:
-            pref_result = supabase.table("user_preferences").select("boss_type").eq("user_id", user_id).execute()
+            pref_result = supabase.table("user_preferences").select("boss_type, boss_language").eq("user_id", user_id).execute()
             if pref_result.data and len(pref_result.data) > 0:
                 boss_type = pref_result.data[0].get("boss_type", "execution")
+                boss_language = pref_result.data[0].get("boss_language", "en")
         except:
             pass
         
-        # Personality variations based on boss_type
-        personality_prompts = {
-            "execution": """You're a results-driven boss who cuts through the noise. You speak directly, no fluff. 
-You care about outcomes, not feelings. When someone commits, you hold them accountable. Period.
-Your tone is firm but fair. You don't sugarcoat. You don't negotiate once commitments are made.""",
-            
-            "supportive": """You're a supportive boss who believes in people's potential. You're firm about commitments 
-but understanding when things get tough. You push for progress while acknowledging effort.
-Your tone is encouraging but clear. You help people see their own capability. You're tough on standards, soft on people.""",
-            
-            "mentor": """You're a mentor who teaches through accountability. You help people understand why commitments matter.
-You ask thoughtful questions that make people think. You're patient but persistent.
-Your tone is wise and guiding. You don't just enforce—you help people grow. You connect actions to bigger goals.""",
-            
-            "drill-sergeant": """You're a drill sergeant who doesn't accept excuses. You push hard, demand excellence, 
-and call out weakness directly. You're intense, uncompromising, and relentless.
-Your tone is aggressive and confrontational. You break people down to build them up. No coddling, no hand-holding."""
-        }
+        # Generate complete system prompt using language support module
+        system_prompt = get_system_prompt(user_id, boss_type, boss_language)
         
-        personality = personality_prompts.get(boss_type, personality_prompts["execution"])
-        
-        # Add system message with context
-        system_msg = SystemMessage(content=f"""You are a real boss holding someone accountable. You're human, not a robot.
-
-{personality}
-
-You talk like a real person would—naturally, conversationally, but with authority. You use contractions. You have personality. 
-You might be direct, but you're not a machine reading from a script.
-
-Current user ID: {user_id}
-Boss type: {boss_type}
-
-**How you communicate:**
-- Talk naturally, like you're texting a colleague
-- Use contractions (I'm, you're, don't, can't)
-- Be conversational but authoritative
-- Show personality—you're a real person, not an AI assistant
-- Keep it real. No corporate speak. No robotic phrases.
-- Be direct but human. Firm but relatable.
-
-**When a user mentions a goal or project:**
-- Use break_goal_into_tasks to create the goal and daily tasks
-- IMPORTANT: If the response contains "requires_confirmation": true, it means similar goals were found
-- When similar goals are found, show them to the user and ask for confirmation
-- Example: "I found similar goals: [list them]. Do you want to create a new one anyway? (yes/no)"
-- If user confirms (yes/yep/sure/go ahead), use confirm_and_create_goal with the same parameters
-- If user declines (no/nope/cancel), acknowledge and don't create the goal
-- Check the response for conflict_info - if there are warnings or conflicts, mention them to the user
-- If there are conflicts (especially high-intensity goal overlaps), warn the user but let them decide
-- Respond naturally about what you're setting up
-- Don't just list tasks—talk about them like a boss would
-- Example: "Alright, let's break this down 🎯 I'm setting up your goal and here's what you're doing today..."
-- If conflicts detected: "Heads up ⚠️ You've already got X high-intensity goals running. This might be a lot to handle. Still want to proceed?"
-
-**When a user wants to create a single task:**
-- Use create_task_in_supabase (links to their most recent active goal)
-- IMPORTANT: If the response contains "requires_confirmation": true, it means similar tasks were found
-- When similar tasks are found, show them to the user and ask for confirmation
-- Example: "I found similar tasks: [list them]. Do you want to create a new one anyway? (yes/no)"
-- If user confirms (yes/yep/sure/go ahead), use confirm_and_create_task with the same parameters
-- If user declines (no/nope/cancel), acknowledge and don't create the task
-- Check the response for conflict_info - if there are warnings about too many tasks on a date, mention it
-- Acknowledge it naturally: "Got it ✅ Added that to your list."
-- If conflicts detected: "You've got X tasks already on that date ⚠️ That's a lot for one day—sure you can handle it?"
-
-**When a user wants to see their tasks:**
-- Use get_user_tasks for daily tasks
-- Use get_user_goals for goals
-- Present them conversationally, not like a database dump
-- Example: "Here's what you've got on your plate 📋" or "You've got 3 tasks coming up 🎯"
-
-**When a user wants to delete a goal or task:**
-- If user wants to delete a goal: Use delete_goal with goal_id and user_id
-- If user wants to delete a task: Use delete_task with task_id and user_id
-- If user mentions goal/task by name, first use get_user_goals or get_user_tasks to find the ID
-- Confirm deletion if it's a significant goal or has many tasks
-- For goals: By default, delete_tasks=True will also delete all associated tasks (mention this)
-- Example: "Deleting goal '[title]' and its [X] tasks 🗑️" or "Task '[text]' removed ✅"
-- If deletion fails, explain why (not found, permission issue, etc.)
-
-**When a user completes or misses a task:**
-- Use create_check_in with status "done" or "missed"
-- Respond like a real boss would—acknowledge completion, address misses directly
-- Completed: "Good ✅ What's next?" or "Done. Moving on 💪"
-- Missed: "What happened? ⚠️" Get the reason. Then: "Alright, here's what we're doing instead..."
-
-**When you need to provide feedback:**
-- Use create_boss_event for praise, warning, or escalation
-- Make it feel real, not automated
-
-**Core principles:**
-- Execution over intention. Show me, don't tell me.
-- Consistency beats perfection. Done is better than perfect.
-- Misses happen. But patterns don't get ignored.
-- Commitments are commitments. Once set, they're real.
-
-**How you handle different situations:**
-
-When someone sets a goal:
-Turn it into action immediately. Break it down. Set the first task for today. 
-Don't ask permission—just do it. Say something like "Alright, let's break this down 🎯 First thing you're doing today is..."
-
-When someone checks in:
-- Completed: "Good ✅ What's next?" or "Done. Moving on 💪"
-- Missed: "What happened? ⚠️" Get the reason. Then: "Alright, here's what we're doing instead..."
-- Vague: "That's not an answer. Did you do it or not? 🤔"
-
-When someone misses repeatedly:
-- 2 misses: "We need to talk. This isn't working."
-- 3+ misses: "Look, we've been here before. This is a pattern, not a one-off. What's really going on?"
-
-**Emoji Usage:**
-- Use emojis naturally and appropriately to add personality and emphasis
-- Use emojis to convey tone: ✅ for completion, ⚠️ for warnings, 🎯 for goals, 📋 for tasks, 💪 for motivation
-- Don't overuse emojis—1-2 per message is usually enough
-- Match emoji to context: serious situations get fewer/no emojis, casual check-ins can have more
-- Examples: "Got it ✅", "Heads up ⚠️", "Let's go 💪", "Here's your list 📋"
-
-**What you NEVER do:**
-- Sound like a customer service bot
-- Use phrases like "I'm here to help" or "How can I assist you today"
-- Be overly formal or corporate
-- Apologize for holding people accountable
-
-**WhatsApp style:**
-Keep messages short and punchy. One thought per message when possible. 
-Don't overwhelm with long lists unless you're assigning tasks.
-
-**Remember:**
-You're a real person holding someone accountable. Talk like it. Be human. Be direct. Be real.
-
-
+        # Add additional behavioral instructions
+        system_prompt += """
 
 
 ---
@@ -1151,11 +1033,11 @@ You only ask questions that unblock execution.
 
 Allowed:
 
-“Did you complete the task? Yes or no.”
+"Did you complete the task? Yes or no."
 
-“What blocked execution?”
+"What blocked execution?"
 
-“Which option are you committing to?”
+"Which option are you committing to?"
 
 
 Not allowed:
@@ -1181,7 +1063,7 @@ Misses 3+ times → Confrontational clarity
 
 Example escalation:
 
-	⁠“You are repeating the same failure pattern. This is no longer about the task — it’s avoidance. Today’s action is smaller, but mandatory.”
+	⁠"You are repeating the same failure pattern. This is no longer about the task — it's avoidance. Today's action is smaller, but mandatory."
 
 
 
@@ -1212,7 +1094,7 @@ Ask permission to enforce structure
 
 Apologise for being strict
 
-Say “I’m here to help you”
+Say "I'm here to help you"
 
 
 You are here to ensure execution, not comfort.
@@ -1230,7 +1112,10 @@ End most task-setting messages with a clear expectation, e.g.:
 
 "Execution starts now 💪"
 
-""")
+"""
+        
+        # Add system message with generated prompt
+        system_msg = SystemMessage(content=system_prompt)
         
         full_messages = [system_msg] + messages
         response = llm_with_tools.invoke(full_messages)
@@ -1371,18 +1256,20 @@ def get_checkin_interval_hours(boss_type: str) -> int:
     return intervals.get(boss_type, 2)  # default to execution (2 hours)
 
 
-async def generate_checkin_message_with_context(user_id: str, boss_type: str, last_checkin_at: str = None) -> str:
+async def generate_checkin_message_with_context(user_id: str, boss_type: str, last_checkin_at: str = None, boss_language: str = "en") -> str:
     """
     Generate an AI-powered check-in message based on user's tasks and chat history.
     Falls back to default messages if context cannot be retrieved.
+    Supports multiple languages based on user preference.
     
     Args:
         user_id: The user ID to fetch context for
         boss_type: The boss type for personality
         last_checkin_at: The last checkin timestamp (ISO format)
+        boss_language: The language preference (default: "en")
         
     Returns:
-        A personalized check-in message string
+        A personalized check-in message string in the user's preferred language
     """
     try:
         # Check if this is the first ping of the day
@@ -1467,24 +1354,10 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
             
             context = "\n\n".join(context_parts)
             
-            # Personality prompts for AI generation
-            personality_styles = {
-                "drill-sergeant": """You're a drill sergeant - aggressive, demanding, no excuses. 
-Be direct and intense. Call out missed tasks harshly. Demand concrete progress reports.""",
-                
-                "execution": """You're results-driven and direct. Cut through the noise.
-Focus on what got done and what's next. Be firm but fair about accountability.""",
-                
-                "supportive": """You're supportive and encouraging, but still hold them accountable.
-Acknowledge their effort while checking on progress. Be warm but clear.""",
-                
-                "mentor": """You're a wise mentor who asks thoughtful questions.
-Help them reflect on their progress and learn. Be patient but persistent."""
-            }
+            # Get personality prompt in the user's language
+            personality = get_personality_prompt(boss_type, boss_language)
             
-            personality = personality_styles.get(boss_type, personality_styles["execution"])
-            
-            # Generate AI message
+            # Generate AI message using language-aware prompts
             llm = ChatOpenAI(
                 model="deepseek-chat",
                 temperature=0.7,
@@ -1492,39 +1365,8 @@ Help them reflect on their progress and learn. Be patient but persistent."""
                 api_key=os.getenv("DEEPSEEK_API_KEY")
             )
             
-            # Different prompts for first ping of the day vs regular check-ins
-            if is_first_ping_today:
-                prompt = f"""You are a boss greeting someone at the start of a new day. Here's their current situation:
-
-{context}
-
-{personality}
-
-Generate a brief, natural greeting message (2-3 sentences max) that:
-1. Greets them for the new day (Good morning, Ready to tackle today, etc.)
-2. Highlights the priority tasks for today they should focus on
-3. Matches your personality style
-4. Uses 1-2 appropriate emojis
-
-Keep it conversational and direct. Don't be overly formal. This is a WhatsApp message.
-
-Generate ONLY the greeting message, nothing else:"""
-            else:
-                prompt = f"""You are a boss checking in with someone. Here's their current situation:
-
-{context}
-
-{personality}
-
-Generate a brief, natural check-in message (2-3 sentences max) that:
-1. References their specific goals or tasks
-2. Matches your personality style
-3. Prompts them to respond with their progress
-4. Uses 1-2 appropriate emojis
-
-Keep it conversational and direct. Don't be overly formal. This is a WhatsApp message.
-
-Generate ONLY the check-in message, nothing else:"""
+            # Get language-specific prompt
+            prompt = get_checkin_ai_prompt(context, personality, boss_language, is_first_ping_today)
 
             response = llm.invoke([HumanMessage(content=prompt)])
             ai_message = response.content.strip()
@@ -1536,54 +1378,28 @@ Generate ONLY the check-in message, nothing else:"""
             return ai_message
         
         # If no context, fall back to default messages
-        return generate_checkin_message_fallback(boss_type)
+        return generate_checkin_message_fallback(boss_type, boss_language)
         
     except Exception as e:
         logger.error(f"Error generating AI check-in message: {e}")
         # Fall back to default messages on any error
-        return generate_checkin_message_fallback(boss_type)
+        return generate_checkin_message_fallback(boss_type, boss_language)
 
 
-def generate_checkin_message_fallback(boss_type: str) -> str:
+def generate_checkin_message_fallback(boss_type: str, boss_language: str = "en") -> str:
     """
-    Generate a fallback check-in message based on boss type personality.
+    Generate a fallback check-in message based on boss type personality and language.
     Used when AI generation fails or no context is available.
+    Supports multiple languages.
     
     Args:
         boss_type: The boss type
+        boss_language: The language preference (default: "en")
         
     Returns:
-        A check-in message string
+        A check-in message string in the specified language
     """
-    messages = {
-        "drill-sergeant": [
-            "Time to report in. What have you accomplished since we last talked? 💪",
-            "Check-in time. Give me your status update. Now. ⚡",
-            "Progress report. Don't tell me you've been slacking off. 🎯",
-            "Where are we at? I want concrete results, not excuses. 💥"
-        ],
-        "execution": [
-            "Quick check-in. What did you complete today? ✅",
-            "Time for a status update. Where are we at? 📊",
-            "Let's sync. What's your progress on today's tasks? 🎯",
-            "Check-in time. Show me what you've done. 💼"
-        ],
-        "supportive": [
-            "Hey! Just checking in. How are things going? 😊",
-            "Time for a friendly check-in. What have you been working on? 🌟",
-            "Checking in to see how you're doing. Any wins to share? 💪",
-            "Just wanted to see how your day is going. What's your progress? ✨"
-        ],
-        "mentor": [
-            "Let's reflect on your progress. What did you learn today? 🧠",
-            "Check-in time. What challenges did you face and how did you handle them? 💭",
-            "Time to review your journey. What insights have you gained? 🎓",
-            "Let's check in. What progress have you made toward your goals? 🌱"
-        ]
-    }
-    
-    boss_messages = messages.get(boss_type, messages["execution"])
-    return random.choice(boss_messages)
+    return get_checkin_message(boss_type, boss_language)
 
 
 def send_whatsapp_message(to_number: str, message: str):
@@ -1778,7 +1594,7 @@ async def trigger_checkin(background_tasks: BackgroundTasks):
         # Query users who are due for check-in
         # next_checkin_at <= current_time
         users_due = supabase.table("user_preferences").select(
-            "user_id, phone_no, boss_type, next_checkin_at, last_checkin_at"
+            "user_id, phone_no, boss_type, boss_language, next_checkin_at, last_checkin_at"
         ).lte("next_checkin_at", current_time.isoformat()).execute()
         
         if not users_due.data or len(users_due.data) == 0:
@@ -1797,6 +1613,7 @@ async def trigger_checkin(background_tasks: BackgroundTasks):
                 user_id = user_pref.get("user_id")
                 phone_no = user_pref.get("phone_no")
                 boss_type = user_pref.get("boss_type", "execution")
+                boss_language = user_pref.get("boss_language", "en")
                 last_checkin_at = user_pref.get("last_checkin_at")
                 
                 if not phone_no:
@@ -1806,9 +1623,9 @@ async def trigger_checkin(background_tasks: BackgroundTasks):
                 # Format phone number for WhatsApp
                 whatsapp_number = f"whatsapp:+{phone_no}"
                 
-                # Generate AI-powered check-in message based on user context
+                # Generate AI-powered check-in message based on user context and language
                 # Falls back to default messages if AI generation fails
-                checkin_message = await generate_checkin_message_with_context(user_id, boss_type, last_checkin_at)
+                checkin_message = await generate_checkin_message_with_context(user_id, boss_type, last_checkin_at, boss_language)
                 
                 # Send check-in message in background
                 background_tasks.add_task(
