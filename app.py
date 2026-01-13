@@ -1411,8 +1411,8 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str) ->
         if tasks:
             task_ids = [t["id"] for t in tasks]
             checkins_result = supabase.table("check_ins").select(
-                "task_id, status, created_at"
-            ).in_("task_id", task_ids).order("created_at", desc=True).limit(10).execute()
+                "task_id, status, checked_at"
+            ).in_("task_id", task_ids).order("checked_at", desc=True).limit(10).execute()
             
             checkins = checkins_result.data if checkins_result.data else []
             checkins_by_task = {c["task_id"]: c["status"] for c in checkins}
