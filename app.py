@@ -1488,7 +1488,7 @@ def lookup_user_id_by_phone(phone_no: str) -> Optional[str]:
 
 
 @app.post("/webhook")
-async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks, api_key: str = Depends(verify_api_key)):
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Webhook endpoint that receives messages from Twilio.
     Returns immediately and processes the message asynchronously in the background.
