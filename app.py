@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Security, BackgroundTasks
+from fastapi import FastAPI, Request, Response, HTTPException, Security, BackgroundTasks, Depends
 from fastapi.responses import PlainTextResponse
-# from fastapi.security.api_key import APIKeyHeader
+from fastapi.security.api_key import APIKeyHeader
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 from supabase import create_client, Client as SupabaseClient
@@ -50,9 +50,26 @@ supabase.postgrest.session = http_client
 # API Key security
 API_KEY_NAME = "X-API-Key"
 MY_API_SECRET = os.getenv("MY_API_SECRET")
-# api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
 logger = logging.getLogger(__name__)
+
+
+async def verify_api_key(api_key: str = Security(api_key_header)) -> str:
+    """Validates the API Key from the header"""
+    if not MY_API_SECRET:
+        logger.error("MY_API_SECRET not configured in environment variables")
+        raise HTTPException(
+            status_code=500,
+            detail="API key validation not configured"
+        )
+    if api_key == MY_API_SECRET:
+        return api_key
+    raise HTTPException(
+        status_code=403,
+        detail="Invalid API key"
+    )
+
 
 # Initialize LangGraph Supabase AsyncPostgresSaver Checkpointer for persistence
 # Note: The checkpointer will be initialized asynchronously when needed
@@ -69,15 +86,6 @@ if SUPABASE_DB_URI:
         supabase_checkpointer = None
 else:
     logger.warning("SUPABASE_DB_URI not set. LangGraph persistence will be disabled.")
-
-# async def get_api_key(api_key: str = Security(api_key_header)):
-#     """Validates the API Key from the header"""
-#     if api_key == MY_API_SECRET:
-#         return api_key
-#     raise HTTPException(
-#         status_code=403,
-#         detail="Could not validate credentials"
-#     )
 
 # ============================================================================
 # LangGraph Tools for Task Management
@@ -1525,12 +1533,12 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     return PlainTextResponse(str(response), media_type="application/xml")
 
 @app.get("/")
-def read_root():
+def read_root(api_key: str = Depends(verify_api_key)):
     """Health check endpoint"""
     return {"status": "WhatsApp chatbot is running", "endpoint": "/webhook"}
 
 @app.get("/tasks/{user_id}")
-async def get_tasks_by_user(user_id: str):
+async def get_tasks_by_user(user_id: str, api_key: str = Depends(verify_api_key)):
     """
     Get all daily tasks for a specific user from Supabase.
     Tasks are linked to goals through goal_id.
@@ -1574,7 +1582,7 @@ async def get_tasks_by_user(user_id: str):
 
 
 @app.post("/trigger-checkin")
-async def trigger_checkin(background_tasks: BackgroundTasks):
+async def trigger_checkin(background_tasks: BackgroundTasks, api_key: str = Depends(verify_api_key)):
     """
     Trigger check-ins for all users who are due for a check-in.
     This endpoint should be called by a cron job on a regular schedule (e.g., every hour).
