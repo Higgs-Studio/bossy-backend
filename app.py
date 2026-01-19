@@ -310,7 +310,7 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
         
         # Use LLM to break down the goal into tasks
         llm = ChatOpenAI(
-            model="deepseek-reasoner",
+            model="deepseek-chat",
             temperature=0.7,
             base_url="https://api.deepseek.com",
             api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -713,7 +713,7 @@ def confirm_and_create_goal(goal: str, user_id: str, intensity: str = "medium", 
         
         # Use LLM to break down the goal into tasks
         llm = ChatOpenAI(
-            model="deepseek-reasoner",
+            model="deepseek-chat",
             temperature=0.7,
             base_url="https://api.deepseek.com",
             api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -1230,7 +1230,7 @@ def create_agent_graph(checkpointer=None):
     
     # Initialize LLM with DeepSeek API
     llm = ChatOpenAI(
-        model="deepseek-reasoner",
+        model="deepseek-chat",
         temperature=0.7,
         base_url="https://api.deepseek.com",
         api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -1439,7 +1439,7 @@ Please revise your previous response based on the feedback above. Make sure your
         
         # Use LLM to review the response
         reviewer_llm = ChatOpenAI(
-            model="deepseek-reasoner",
+            model="deepseek-chat",
             temperature=0.3,  # Lower temperature for more consistent reviews
             base_url="https://api.deepseek.com",
             api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -1804,7 +1804,7 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
             
             # Generate AI message using language-aware prompts
             llm = ChatOpenAI(
-                model="deepseek-reasoner",
+                model="deepseek-chat",
                 temperature=0.7,
                 base_url="https://api.deepseek.com",
                 api_key=os.getenv("DEEPSEEK_API_KEY")
