@@ -197,7 +197,7 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
         user_id: The user ID (UUID) who owns this goal
         intensity: Goal intensity - "low", "medium", or "high" (default: "medium")
         start_date: Start date in YYYY-MM-DD format (default: today)
-        end_date: End date in YYYY-MM-DD format (default: 30 days from start)
+        end_date: End date in YYYY-MM-DD format (default: 1 days from start)
         boss_type: Boss type - "execution", "supportive", "mentor", or "drill-sergeant" (default: from user_preferences)
         
     Returns:
@@ -220,7 +220,7 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
             start_date = date.today().isoformat()
         if not end_date:
             start = date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
-            end_date = (start + timedelta(days=30)).isoformat()
+            end_date = (start + timedelta(days=1)).isoformat()
         
         # Check for conflicts with existing active goals
         existing_goals_result = supabase.table("goals").select("id, title, intensity, status").eq("user_id", user_id).eq("status", "active").execute()
@@ -310,7 +310,7 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
         
         # Use LLM to break down the goal into tasks
         llm = ChatOpenAI(
-            model="deepseek-chat",
+            model="deepseek-reasoner",
             temperature=0.7,
             base_url="https://api.deepseek.com",
             api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -540,7 +540,7 @@ def get_user_tasks(user_id: str, goal_id: str = None, task_date: str = None) -> 
         
         tasks_result = tasks_query.order("task_date", desc=False).execute()
         
-        # Get check_ins for these tasks to show status
+        # Get check_ins for these tasks to show check-in history
         task_ids = [t["id"] for t in tasks_result.data]
         check_ins = []
         if task_ids:
@@ -552,11 +552,12 @@ def get_user_tasks(user_id: str, goal_id: str = None, task_date: str = None) -> 
         tasks_with_status = []
         for task in tasks_result.data:
             task_with_status = task.copy()
+            # Status is now stored in daily_tasks table, default to "todo" if not set
+            if "status" not in task_with_status or task_with_status["status"] is None:
+                task_with_status["status"] = "todo"
+            # Include check-in info if available (for backward compatibility)
             if task["id"] in check_ins_by_task:
                 task_with_status["check_in"] = check_ins_by_task[task["id"]]
-                task_with_status["status"] = check_ins_by_task[task["id"]]["status"]
-            else:
-                task_with_status["status"] = "pending"
             tasks_with_status.append(task_with_status)
         
         return json.dumps({
@@ -665,7 +666,7 @@ def confirm_and_create_goal(goal: str, user_id: str, intensity: str = "medium", 
         user_id: The user ID (UUID) who owns this goal
         intensity: Goal intensity - "low", "medium", or "high" (default: "medium")
         start_date: Start date in YYYY-MM-DD format (default: today)
-        end_date: End date in YYYY-MM-DD format (default: 30 days from start)
+        end_date: End date in YYYY-MM-DD format (default: 1 days from start)
         boss_type: Boss type (optional)
         
     Returns:
@@ -688,7 +689,7 @@ def confirm_and_create_goal(goal: str, user_id: str, intensity: str = "medium", 
             start_date = date.today().isoformat()
         if not end_date:
             start = date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
-            end_date = (start + timedelta(days=30)).isoformat()
+            end_date = (start + timedelta(days=1)).isoformat()
         
         # Create the goal directly (skip similarity check since user confirmed)
         goal_data = {
@@ -712,7 +713,7 @@ def confirm_and_create_goal(goal: str, user_id: str, intensity: str = "medium", 
         
         # Use LLM to break down the goal into tasks
         llm = ChatOpenAI(
-            model="deepseek-chat",
+            model="deepseek-reasoner",
             temperature=0.7,
             base_url="https://api.deepseek.com",
             api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -971,6 +972,244 @@ def delete_task(task_id: str, user_id: str) -> str:
         })
 
 
+@tool
+def find_task_by_description(user_id: str, task_description: str, task_date: str = None) -> str:
+    """
+    Find a task by searching for similar text in the task description. This helps identify the correct task_id
+    when a user refers to a task by its description rather than ID.
+    
+    Args:
+        user_id: The user ID (UUID) who owns the task
+        task_description: Keywords or description to search for in tasks
+        task_date: Optional date in YYYY-MM-DD format to narrow the search
+        
+    Returns:
+        A JSON string with matching tasks
+    """
+    try:
+        # Get all active goals for the user
+        goals_result = supabase.table("goals").select("id, title").eq("user_id", user_id).eq("status", "active").execute()
+        goal_ids = [g["id"] for g in (goals_result.data if goals_result.data else [])]
+        
+        if not goal_ids:
+            return json.dumps({
+                "success": True,
+                "count": 0,
+                "tasks": [],
+                "message": "No active goals found"
+            })
+        
+        # Get tasks for these goals
+        tasks_query = supabase.table("daily_tasks").select("id, task_text, task_date, status, goal_id").in_("goal_id", goal_ids)
+        if task_date:
+            tasks_query = tasks_query.eq("task_date", task_date)
+        
+        tasks_result = tasks_query.order("task_date", desc=True).limit(20).execute()
+        all_tasks = tasks_result.data if tasks_result.data else []
+        
+        # Find similar tasks using fuzzy matching
+        search_lower = task_description.lower().strip()
+        matching_tasks = []
+        
+        for task in all_tasks:
+            task_text_lower = task.get("task_text", "").lower()
+            # Calculate simple similarity - check if search terms appear in task text
+            if search_lower in task_text_lower or task_text_lower in search_lower:
+                similarity = calculate_similarity(search_lower, task_text_lower)
+                matching_tasks.append({
+                    "task": task,
+                    "similarity": similarity
+                })
+        
+        # Sort by similarity
+        matching_tasks.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        # Return top 5 matches
+        top_matches = matching_tasks[:5]
+        
+        return json.dumps({
+            "success": True,
+            "count": len(top_matches),
+            "tasks": [m["task"] for m in top_matches],
+            "search_term": task_description,
+            "message": f"Found {len(top_matches)} matching task(s)"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error finding task: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def update_task_status(task_id: str, user_id: str, status: str) -> str:
+    """
+    Update the status of a task. This allows tracking task progress.
+    
+    Args:
+        task_id: The task ID (UUID) to update
+        user_id: The user ID (UUID) who owns this task (for verification)
+        status: New status - "todo", "in_progress", or "done"
+        
+    Returns:
+        A JSON string with the update result
+    """
+    try:
+        # Validate status
+        valid_statuses = ["todo", "in_progress", "done"]
+        if status not in valid_statuses:
+            return json.dumps({
+                "success": False,
+                "error": f"Invalid status: {status}. Must be one of: {', '.join(valid_statuses)}"
+            })
+        
+        # First verify the task belongs to the user by checking through the goal
+        task_result = supabase.table("daily_tasks").select("id, task_text, task_date, goal_id").eq("id", task_id).execute()
+        
+        if not task_result.data or len(task_result.data) == 0:
+            return json.dumps({
+                "success": False,
+                "error": "Task not found"
+            })
+        
+        task = task_result.data[0]
+        task_text = task.get("task_text", "Unknown")
+        task_date = task.get("task_date")
+        goal_id = task.get("goal_id")
+        
+        # Verify the goal belongs to the user
+        goal_result = supabase.table("goals").select("id, user_id, title").eq("id", goal_id).eq("user_id", user_id).execute()
+        
+        if not goal_result.data or len(goal_result.data) == 0:
+            return json.dumps({
+                "success": False,
+                "error": "Task not found or you don't have permission to update it"
+            })
+        
+        goal_title = goal_result.data[0].get("title", "Unknown")
+        
+        # Update the task status
+        update_result = supabase.table("daily_tasks").update({
+            "status": status
+        }).eq("id", task_id).execute()
+        
+        # If status is "done", also create/update check-in record for backward compatibility
+        if status == "done":
+            try:
+                # Check if check-in already exists
+                existing_checkin = supabase.table("check_ins").select("id").eq("task_id", task_id).execute()
+                
+                if existing_checkin.data and len(existing_checkin.data) > 0:
+                    # Update existing check-in
+                    supabase.table("check_ins").update({
+                        "status": "done",
+                        "checked_at": datetime.now().isoformat()
+                    }).eq("task_id", task_id).execute()
+                else:
+                    # Create new check-in
+                    supabase.table("check_ins").insert({
+                        "task_id": task_id,
+                        "user_id": user_id,
+                        "status": "done",
+                        "checked_at": datetime.now().isoformat()
+                    }).execute()
+            except Exception as checkin_error:
+                logger.warning(f"Could not update check-in record: {checkin_error}")
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Task '{task_text}' status updated to '{status}'",
+            "task": {
+                "id": task_id,
+                "task_text": task_text,
+                "task_date": task_date,
+                "status": status,
+                "goal": goal_title
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating task status: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def update_goal_status(goal_id: str, user_id: str, status: str) -> str:
+    """
+    Update the status of a goal. This allows tracking goal progress and marking goals as completed or abandoned.
+    
+    Args:
+        goal_id: The goal ID (UUID) to update
+        user_id: The user ID (UUID) who owns this goal (for verification)
+        status: New status - "active", "completed", or "abandoned"
+        
+    Returns:
+        A JSON string with the update result
+    """
+    try:
+        # Validate status
+        valid_statuses = ["active", "completed", "abandoned"]
+        if status not in valid_statuses:
+            return json.dumps({
+                "success": False,
+                "error": f"Invalid status: {status}. Must be one of: {', '.join(valid_statuses)}"
+            })
+        
+        # First verify the goal belongs to the user
+        goal_result = supabase.table("goals").select("id, title, user_id, intensity, start_date, end_date").eq("id", goal_id).eq("user_id", user_id).execute()
+        
+        if not goal_result.data or len(goal_result.data) == 0:
+            return json.dumps({
+                "success": False,
+                "error": "Goal not found or you don't have permission to update it"
+            })
+        
+        goal = goal_result.data[0]
+        goal_title = goal.get("title", "Unknown")
+        
+        # Update the goal status
+        update_result = supabase.table("goals").update({
+            "status": status
+        }).eq("id", goal_id).execute()
+        
+        # Get count of associated tasks
+        tasks_result = supabase.table("daily_tasks").select("id, status").eq("goal_id", goal_id).execute()
+        tasks = tasks_result.data if tasks_result.data else []
+        total_tasks = len(tasks)
+        completed_tasks = len([t for t in tasks if t.get("status") == "done"])
+        
+        message = f"Goal '{goal_title}' status updated to '{status}'"
+        if total_tasks > 0:
+            message += f" ({completed_tasks}/{total_tasks} tasks completed)"
+        
+        return json.dumps({
+            "success": True,
+            "message": message,
+            "goal": {
+                "id": goal_id,
+                "title": goal_title,
+                "status": status,
+                "intensity": goal.get("intensity"),
+                "start_date": goal.get("start_date"),
+                "end_date": goal.get("end_date"),
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating goal status: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
 # ============================================================================
 # LangGraph State and Agent Setup
 # ============================================================================
@@ -978,6 +1217,8 @@ def delete_task(task_id: str, user_id: str) -> str:
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     user_id: str
+    reviewer_feedback: Optional[str]  # Feedback from reviewer for rework
+    review_count: int  # Track number of review iterations
 
 
 def create_agent_graph(checkpointer=None):
@@ -989,7 +1230,7 @@ def create_agent_graph(checkpointer=None):
     
     # Initialize LLM with DeepSeek API
     llm = ChatOpenAI(
-        model="deepseek-chat",
+        model="deepseek-reasoner",
         temperature=0.7,
         base_url="https://api.deepseek.com",
         api_key=os.getenv("DEEPSEEK_API_KEY")
@@ -1006,7 +1247,10 @@ def create_agent_graph(checkpointer=None):
         create_boss_event,
         get_user_goals,
         delete_goal,
-        delete_task
+        delete_task,
+        find_task_by_description,
+        update_task_status,
+        update_goal_status
     ]
     llm_with_tools = llm.bind_tools(tools)
     
@@ -1014,6 +1258,7 @@ def create_agent_graph(checkpointer=None):
     def call_model(state: AgentState):
         messages = state["messages"]
         user_id = state.get("user_id", "unknown")
+        reviewer_feedback = state.get("reviewer_feedback")
         
         # Get user's boss_type and boss_language preferences
         boss_type = "execution"  # default
@@ -1031,6 +1276,34 @@ def create_agent_graph(checkpointer=None):
         
         # Add additional behavioral instructions
         system_prompt += """
+
+
+---
+
+Task and Goal Status Management
+
+You can now update task and goal statuses based on user messages:
+
+Task Statuses:
+- "todo": Task is planned but not started
+- "in_progress": User is currently working on the task
+- "done": Task is completed
+
+Goal Statuses:
+- "active": Goal is currently being worked on
+- "completed": Goal has been achieved
+- "abandoned": Goal has been given up or is no longer relevant
+
+When a user mentions completing a task, updating progress, or changing goal status:
+1. Use find_task_by_description() to identify the correct task if they don't provide a task ID
+2. Use update_task_status() to update task status
+3. Use update_goal_status() to update goal status
+
+Examples:
+- "I finished the research task" → Find task, update to "done"
+- "I'm working on the design mockups" → Find task, update to "in_progress"
+- "I want to abandon my workout goal" → Find goal, update to "abandoned"
+- "I completed my learning goal" → Find goal, update to "completed"
 
 
 ---
@@ -1122,17 +1395,134 @@ End most task-setting messages with a clear expectation, e.g.:
 
 """
         
+        # If there's reviewer feedback, add it to the prompt
+        if reviewer_feedback:
+            system_prompt += f"""
+
+---
+
+REVIEWER FEEDBACK - REWORK REQUIRED:
+
+{reviewer_feedback}
+
+Please revise your previous response based on the feedback above. Make sure your response is clear, actionable, and aligned with your personality and communication style.
+"""
+        
         # Add system message with generated prompt
         system_msg = SystemMessage(content=system_prompt)
         
         full_messages = [system_msg] + messages
         response = llm_with_tools.invoke(full_messages)
-        return {"messages": [response]}
+        return {"messages": [response], "reviewer_feedback": None}  # Clear feedback after using it
     
     # Define tool node
     tool_node = ToolNode(tools)
     
-    # Define routing logic
+    # Define reviewer node - acts as a gatekeeper to review output quality
+    def review_output(state: AgentState):
+        messages = state["messages"]
+        last_message = messages[-1]
+        review_count = state.get("review_count", 0)
+        
+        # Extract the agent's response
+        if isinstance(last_message, AIMessage):
+            agent_response = last_message.content
+        else:
+            # If not an AI message, skip review
+            return {"review_count": review_count}
+        
+        # Skip review if we've already done too many iterations (prevent infinite loops)
+        MAX_REVIEW_ITERATIONS = 2
+        if review_count >= MAX_REVIEW_ITERATIONS:
+            logger.warning(f"Max review iterations ({MAX_REVIEW_ITERATIONS}) reached. Approving message.")
+            return {"review_count": review_count}
+        
+        # Use LLM to review the response
+        reviewer_llm = ChatOpenAI(
+            model="deepseek-reasoner",
+            temperature=0.3,  # Lower temperature for more consistent reviews
+            base_url="https://api.deepseek.com",
+            api_key=os.getenv("DEEPSEEK_API_KEY")
+        )
+        
+        review_prompt = f"""You are a quality reviewer for a goal-execution planner. Review the following response and determine if it meets quality standards.
+
+The response should:
+1. Be clear and actionable
+2. Match the personality/tone expected (execution-focused, not overly friendly)
+3. Not contain contradictions or confusing information
+4. Not reference non-existent data or make assumptions without context
+5. Be appropriate for WhatsApp (concise, not too long)
+6. Actually address what the user was asking about
+7. temporal accuracy (dates, “today”, “this week”, “next Saturday”),
+8. scope creep (invented tasks, extra days, extra objectives),
+9. realism (tasks that fit the user’s constraints),
+10. clarity (actionable, unambiguous tasks),
+11. safety/ethics (no coercion beyond consent).
+
+Core Principle: Never invent time.
+- If the user says “today”, your plan must ONLY contain today’s tasks.
+- Only include future-day tasks if the user explicitly requested future planning OR clearly consented (e.g., “help me plan the week”, “remind me next Saturday”, “make a schedule”).
+- If the user mentions a future event date (e.g., “next Saturday April 5”), you may include tasks for that date ONLY if the user asked to plan for it. Otherwise, treat it as info, not a planning request.
+
+Terminology and Time Parsing Rules:
+- “today / 今⽇ / 聽日 / 今朝 / 今晚” => tasks strictly within the current day.
+- “this week / 呢個星期” => tasks within the current week only.
+- “next Saturday (Apr 5)” => see whether user asked to plan ahead; if not, do not generate tasks for other days.
+- If the plan includes dates not grounded in user text, mark as hallucinated time.
+
+Hard Rules (non-negotiable):
+- No adding tasks on dates not explicitly authorized.
+- No creating “prep tasks” on other days unless user asked for a plan spanning multiple days.
+- If user intent is ambiguous (e.g., mentions a future date but doesn’t ask to plan it), default to MINIMAL SCOPE and ask ONE clarification question in the rework instructions (not in the final plan).
+- Prefer fewer tasks over invented structure. Precision beats completeness.
+
+Quality Checklist (use mentally; reflect briefly in reasoning/issues):
+- ⁠Time scope matches user request (today vs multi-day).
+- ⁠All tasks trace to user’s stated intent.
+- ⁠No extra errands, no moralizing, no “helpful” additions.
+- ⁠Tasks are actionable: verb + object + place/contact + success criteria (when applicable).
+- ⁠Language matches user tone (HK Cantonese if the conversation is Cantonese).
+
+
+Response to review:
+---
+{agent_response}
+---
+
+Reply with ONLY one of the following:
+- "APPROVE" if the response meets all quality standards
+- "REWORK: [specific feedback]" if the response needs improvement
+
+Examples:
+- "REWORK: The response references a task that wasn't mentioned in the conversation. Be more specific about which task."
+- "REWORK: The tone is too friendly and doesn't match the execution-focused personality."
+- "REWORK: The response is too vague. Provide specific, actionable guidance."
+- "APPROVE"
+"""
+        
+        review_response = reviewer_llm.invoke([HumanMessage(content=review_prompt)])
+        review_result = review_response.content.strip()
+        
+        logger.info(f"Reviewer decision (iteration {review_count + 1}): {review_result}")
+        
+        # Parse the review result
+        if review_result.startswith("APPROVE"):
+            # Approved - no changes needed
+            return {"review_count": review_count + 1}
+        elif review_result.startswith("REWORK:"):
+            # Extract feedback
+            feedback = review_result.replace("REWORK:", "").strip()
+            return {
+                "reviewer_feedback": feedback,
+                "review_count": review_count + 1
+            }
+        else:
+            # If unclear, approve by default
+            logger.warning(f"Unclear review result: {review_result}. Approving by default.")
+            return {"review_count": review_count + 1}
+    
+    # Define routing logic for agent
     def should_continue(state: AgentState):
         messages = state["messages"]
         last_message = messages[-1]
@@ -1140,7 +1530,17 @@ End most task-setting messages with a clear expectation, e.g.:
         # If there are tool calls, continue to tools
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
             return "tools"
-        # Otherwise, end
+        # Otherwise, send to reviewer
+        return "reviewer"
+    
+    # Define routing logic for reviewer
+    def reviewer_decision(state: AgentState):
+        reviewer_feedback = state.get("reviewer_feedback")
+        
+        # If there's feedback, send back to agent for rework
+        if reviewer_feedback:
+            return "agent"
+        # Otherwise, approve and end
         return END
     
     # Build the graph
@@ -1149,6 +1549,7 @@ End most task-setting messages with a clear expectation, e.g.:
     # Add nodes
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", tool_node)
+    workflow.add_node("reviewer", review_output)
     
     # Set entry point
     workflow.set_entry_point("agent")
@@ -1159,10 +1560,20 @@ End most task-setting messages with a clear expectation, e.g.:
         should_continue,
         {
             "tools": "tools",
-            END: END
+            "reviewer": "reviewer"
         }
     )
     workflow.add_edge("tools", "agent")
+    
+    # Add reviewer conditional edges
+    workflow.add_conditional_edges(
+        "reviewer",
+        reviewer_decision,
+        {
+            "agent": "agent",
+            END: END
+        }
+    )
     
     # Compile with checkpointer if available (enables persistence)
     if checkpointer:
@@ -1202,7 +1613,9 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
         # If checkpointer is enabled, previous messages will be loaded automatically
         initial_state = {
             "messages": [HumanMessage(content=user_message)],
-            "user_id": user_id
+            "user_id": user_id,
+            "reviewer_feedback": None,
+            "review_count": 0
         }
         
         # Get or create checkpointer connection
@@ -1306,31 +1719,31 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
         if goals:
             goal_ids = [g["id"] for g in goals]
             tasks_result = supabase.table("daily_tasks").select(
-                "id, task_text, task_date"
+                "id, task_text, task_date, status"
             ).in_("goal_id", goal_ids).gte(
                 "task_date", week_ago.isoformat()
             ).order("task_date", desc=False).limit(10).execute()
             
             tasks = tasks_result.data if tasks_result.data else []
         
-        # Get check-in status for recent tasks
+        # Build task statuses from daily_tasks (status field)
         task_statuses = []
         if tasks:
-            task_ids = [t["id"] for t in tasks]
-            checkins_result = supabase.table("check_ins").select(
-                "task_id, status, checked_at"
-            ).in_("task_id", task_ids).order("checked_at", desc=True).limit(10).execute()
-            
-            checkins = checkins_result.data if checkins_result.data else []
-            checkins_by_task = {c["task_id"]: c["status"] for c in checkins}
-            
             for task in tasks:
-                task_id = task["id"]
-                status = checkins_by_task.get(task_id, "pending")
+                task_date_obj = date.fromisoformat(task["task_date"])
+                # Use status from daily_tasks table, default to "todo"
+                status = task.get("status", "todo")
+                # Map statuses for display (todo/in_progress -> pending for display purposes)
+                display_status = status
+                if status in ["todo", "in_progress"]:
+                    display_status = "pending"
+                
                 task_statuses.append({
                     "task": task["task_text"],
                     "date": task["task_date"],
-                    "status": status
+                    "status": display_status,
+                    "actual_status": status,  # Keep original status for filtering
+                    "is_expired": task_date_obj < today
                 })
         
         # If we have context, generate AI message
@@ -1338,23 +1751,47 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
             # Build context string
             context_parts = []
             
-            if goals:
-                goals_text = "\n".join([f"- {g['title']} (intensity: {g['intensity']})" for g in goals])
+            # Separate expired goals
+            expired_goals = []
+            active_goals_current = []
+            for g in goals:
+                end_date = date.fromisoformat(g['end_date']) if g.get('end_date') else None
+                if end_date and end_date < today and g.get('status') == 'active':
+                    expired_goals.append(g)
+                else:
+                    active_goals_current.append(g)
+            
+            if active_goals_current:
+                goals_text = "\n".join([f"- {g['title']} (intensity: {g['intensity']})" for g in active_goals_current])
                 context_parts.append(f"Active Goals:\n{goals_text}")
             
+            if expired_goals:
+                expired_goals_text = "\n".join([f"- {g['title']} (ended {g['end_date']})" for g in expired_goals])
+                context_parts.append(f"Expired Goals (still active):\n{expired_goals_text}")
+            
             if task_statuses:
-                # Separate completed and pending tasks
+                # Separate completed, pending, missed, and expired tasks
                 completed = [t for t in task_statuses if t["status"] == "done"]
-                pending = [t for t in task_statuses if t["status"] == "pending"]
+                pending_today = [t for t in task_statuses if t["status"] == "pending" and not t["is_expired"] and t["date"] == today.isoformat()]
+                pending_future = [t for t in task_statuses if t["status"] == "pending" and not t["is_expired"] and t["date"] != today.isoformat()]
+                expired_incomplete = [t for t in task_statuses if t["is_expired"] and t["status"] != "done"]
                 missed = [t for t in task_statuses if t["status"] == "missed"]
                 
                 if completed:
                     completed_text = "\n".join([f"- {t['task']} ({t['date']})" for t in completed[:3]])
                     context_parts.append(f"Recently Completed:\n{completed_text}")
                 
-                if pending:
-                    pending_text = "\n".join([f"- {t['task']} ({t['date']})" for t in pending[:3]])
-                    context_parts.append(f"Pending Tasks:\n{pending_text}")
+                if pending_today:
+                    pending_today_text = "\n".join([f"- {t['task']}" for t in pending_today[:3]])
+                    context_parts.append(f"Planned for Today:\n{pending_today_text}")
+                
+                if expired_incomplete:
+                    expired_text = "\n".join([f"- {t['task']} (from {t['date']})" for t in expired_incomplete[:3]])
+                    context_parts.append(f"Expired/Incomplete Tasks:\n{expired_text}")
+                
+                if pending_future:
+                    pending_future_text = "\n".join([f"- {t['task']} ({t['date']})" for t in pending_future[:2]])
+                    context_parts.append(f"Upcoming Tasks:\n{pending_future_text}")
                 
                 if missed:
                     missed_text = "\n".join([f"- {t['task']} ({t['date']})" for t in missed[:2]])
@@ -1367,7 +1804,7 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
             
             # Generate AI message using language-aware prompts
             llm = ChatOpenAI(
-                model="deepseek-chat",
+                model="deepseek-reasoner",
                 temperature=0.7,
                 base_url="https://api.deepseek.com",
                 api_key=os.getenv("DEEPSEEK_API_KEY")
