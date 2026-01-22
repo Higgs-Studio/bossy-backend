@@ -1645,8 +1645,6 @@ def mark_task_done_by_description(user_id: str, task_description: str) -> str:
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     user_id: str
-    reviewer_feedback: Optional[str]  # Feedback from reviewer for rework
-    review_count: int  # Track number of review iterations
 
 
 def create_agent_graph(checkpointer=None):
@@ -1693,7 +1691,6 @@ def create_agent_graph(checkpointer=None):
     def call_model(state: AgentState):
         messages = state["messages"]
         user_id = state.get("user_id", "unknown")
-        reviewer_feedback = state.get("reviewer_feedback")
         
         # Get user's boss_type and boss_language preferences
         boss_type = "execution"  # default
@@ -1898,132 +1895,15 @@ End most task-setting messages with:
 
 """
         
-        # If there's reviewer feedback, add it to the prompt
-        if reviewer_feedback:
-            system_prompt += f"""
-
----
-
-REVIEWER FEEDBACK - REWORK REQUIRED:
-
-{reviewer_feedback}
-
-Please revise your previous response based on the feedback above. Make sure your response is clear, actionable, and aligned with your personality and communication style.
-"""
-        
         # Add system message with generated prompt
         system_msg = SystemMessage(content=system_prompt)
         
         full_messages = [system_msg] + messages
         response = llm_with_tools.invoke(full_messages)
-        return {"messages": [response], "reviewer_feedback": None}  # Clear feedback after using it
+        return {"messages": [response]}
     
     # Define tool node
     tool_node = ToolNode(tools)
-    
-    # Define reviewer node - acts as a gatekeeper to review output quality
-    def review_output(state: AgentState):
-        messages = state["messages"]
-        last_message = messages[-1]
-        review_count = state.get("review_count", 0)
-        
-        # Extract the agent's response
-        if isinstance(last_message, AIMessage):
-            agent_response = last_message.content
-        else:
-            # If not an AI message, skip review
-            return {"review_count": review_count}
-        
-        # Skip review if we've already done too many iterations (prevent infinite loops)
-        MAX_REVIEW_ITERATIONS = 2
-        if review_count >= MAX_REVIEW_ITERATIONS:
-            logger.warning(f"Max review iterations ({MAX_REVIEW_ITERATIONS}) reached. Approving message.")
-            return {"review_count": review_count}
-        
-        # Use LLM to review the response
-        reviewer_llm = ChatOpenAI(
-            model="deepseek-chat",
-            temperature=0.3,  # Lower temperature for more consistent reviews
-            base_url="https://api.deepseek.com",
-            api_key=os.getenv("DEEPSEEK_API_KEY")
-        )
-        
-        review_prompt = f"""You are a quality reviewer for a goal-execution planner. Review the following response and determine if it meets quality standards.
-
-The response should:
-1. Be clear and actionable
-2. Match the personality/tone expected (execution-focused, not overly friendly)
-3. Not contain contradictions or confusing information
-4. Not reference non-existent data or make assumptions without context
-5. Be appropriate for WhatsApp (concise, not too long)
-6. Actually address what the user was asking about
-7. temporal accuracy (dates, “today”, “this week”, “next Saturday”),
-8. scope creep (invented tasks, extra days, extra objectives),
-9. realism (tasks that fit the user’s constraints),
-10. clarity (actionable, unambiguous tasks),
-11. safety/ethics (no coercion beyond consent).
-
-Core Principle: Never invent time.
-- If the user says “today”, your plan must ONLY contain today’s tasks.
-- Only include future-day tasks if the user explicitly requested future planning OR clearly consented (e.g., “help me plan the week”, “remind me next Saturday”, “make a schedule”).
-- If the user mentions a future event date (e.g., “next Saturday April 5”), you may include tasks for that date ONLY if the user asked to plan for it. Otherwise, treat it as info, not a planning request.
-
-Terminology and Time Parsing Rules:
-- “today / 今⽇ / 聽日 / 今朝 / 今晚” => tasks strictly within the current day.
-- “this week / 呢個星期” => tasks within the current week only.
-- “next Saturday (Apr 5)” => see whether user asked to plan ahead; if not, do not generate tasks for other days.
-- If the plan includes dates not grounded in user text, mark as hallucinated time.
-
-Hard Rules (non-negotiable):
-- No adding tasks on dates not explicitly authorized.
-- No creating “prep tasks” on other days unless user asked for a plan spanning multiple days.
-- If user intent is ambiguous (e.g., mentions a future date but doesn’t ask to plan it), default to MINIMAL SCOPE and ask ONE clarification question in the rework instructions (not in the final plan).
-- Prefer fewer tasks over invented structure. Precision beats completeness.
-
-Quality Checklist (use mentally; reflect briefly in reasoning/issues):
-- ⁠Time scope matches user request (today vs multi-day).
-- ⁠All tasks trace to user’s stated intent.
-- ⁠No extra errands, no moralizing, no “helpful” additions.
-- ⁠Tasks are actionable: verb + object + place/contact + success criteria (when applicable).
-- ⁠Language matches user tone (HK Cantonese if the conversation is Cantonese).
-
-
-Response to review:
----
-{agent_response}
----
-
-Reply with ONLY one of the following:
-- "APPROVE" if the response meets all quality standards
-- "REWORK: [specific feedback]" if the response needs improvement
-
-Examples:
-- "REWORK: The response references a task that wasn't mentioned in the conversation. Be more specific about which task."
-- "REWORK: The tone is too friendly and doesn't match the execution-focused personality."
-- "REWORK: The response is too vague. Provide specific, actionable guidance."
-- "APPROVE"
-"""
-        
-        review_response = reviewer_llm.invoke([HumanMessage(content=review_prompt)])
-        review_result = review_response.content.strip()
-        
-        logger.info(f"Reviewer decision (iteration {review_count + 1}): {review_result}")
-        
-        # Parse the review result
-        if review_result.startswith("APPROVE"):
-            # Approved - no changes needed
-            return {"review_count": review_count + 1}
-        elif review_result.startswith("REWORK:"):
-            # Extract feedback
-            feedback = review_result.replace("REWORK:", "").strip()
-            return {
-                "reviewer_feedback": feedback,
-                "review_count": review_count + 1
-            }
-        else:
-            # If unclear, approve by default
-            logger.warning(f"Unclear review result: {review_result}. Approving by default.")
-            return {"review_count": review_count + 1}
     
     # Define routing logic for agent
     def should_continue(state: AgentState):
@@ -2033,17 +1913,7 @@ Examples:
         # If there are tool calls, continue to tools
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
             return "tools"
-        # Otherwise, send to reviewer
-        return "reviewer"
-    
-    # Define routing logic for reviewer
-    def reviewer_decision(state: AgentState):
-        reviewer_feedback = state.get("reviewer_feedback")
-        
-        # If there's feedback, send back to agent for rework
-        if reviewer_feedback:
-            return "agent"
-        # Otherwise, approve and end
+        # Otherwise, end the conversation
         return END
     
     # Build the graph
@@ -2052,7 +1922,6 @@ Examples:
     # Add nodes
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", tool_node)
-    workflow.add_node("reviewer", review_output)
     
     # Set entry point
     workflow.set_entry_point("agent")
@@ -2063,20 +1932,10 @@ Examples:
         should_continue,
         {
             "tools": "tools",
-            "reviewer": "reviewer"
-        }
-    )
-    workflow.add_edge("tools", "agent")
-    
-    # Add reviewer conditional edges
-    workflow.add_conditional_edges(
-        "reviewer",
-        reviewer_decision,
-        {
-            "agent": "agent",
             END: END
         }
     )
+    workflow.add_edge("tools", "agent")
     
     # Compile with checkpointer if available (enables persistence)
     if checkpointer:
@@ -2116,9 +1975,7 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
         # If checkpointer is enabled, previous messages will be loaded automatically
         initial_state = {
             "messages": [HumanMessage(content=user_message)],
-            "user_id": user_id,
-            "reviewer_feedback": None,
-            "review_count": 0
+            "user_id": user_id
         }
         
         # Get or create checkpointer connection
