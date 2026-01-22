@@ -1210,6 +1210,434 @@ def update_goal_status(goal_id: str, user_id: str, status: str) -> str:
         })
 
 
+@tool
+def get_incomplete_tasks_prioritized(user_id: str, scope: str = "today") -> str:
+    """
+    Get incomplete tasks for user, prioritized by deadline proximity, intensity, and task size.
+    Use this when user asks "What should I do now?", "What's my plan for today/this week?", etc.
+    
+    Args:
+        user_id: The user ID (UUID)
+        scope: "today" for today's focus, "week" for weekly plan, "all" for all incomplete
+        
+    Returns:
+        A JSON string with prioritized incomplete tasks and recommendations
+    """
+    try:
+        today = date.today()
+        
+        # Get all active goals for the user
+        goals_result = supabase.table("goals").select("id, title, intensity, start_date, end_date, status").eq("user_id", user_id).eq("status", "active").execute()
+        goals = goals_result.data if goals_result.data else []
+        
+        if not goals:
+            return json.dumps({
+                "success": True,
+                "message": "No active goals found",
+                "incomplete_tasks": [],
+                "expired_tasks": [],
+                "today_tasks": [],
+                "upcoming_tasks": [],
+                "recommendation": None
+            })
+        
+        goal_ids = [g["id"] for g in goals]
+        goal_map = {g["id"]: g for g in goals}
+        
+        # Get all tasks that are not done
+        tasks_result = supabase.table("daily_tasks").select("id, task_text, task_date, status, goal_id").in_("goal_id", goal_ids).neq("status", "done").execute()
+        tasks = tasks_result.data if tasks_result.data else []
+        
+        # Categorize tasks
+        expired_tasks = []  # Past due date, not completed
+        today_tasks = []    # Due today
+        upcoming_tasks = [] # Future tasks
+        
+        for task in tasks:
+            task_date_str = task.get("task_date")
+            if not task_date_str:
+                continue
+                
+            task_date_obj = date.fromisoformat(task_date_str)
+            goal = goal_map.get(task.get("goal_id"), {})
+            
+            # Add goal info to task
+            task["goal_title"] = goal.get("title", "Unknown")
+            task["goal_intensity"] = goal.get("intensity", "medium")
+            task["goal_end_date"] = goal.get("end_date")
+            
+            # Calculate priority score (higher = more urgent)
+            priority_score = 0
+            
+            # Intensity factor
+            intensity_scores = {"high": 30, "medium": 20, "low": 10}
+            priority_score += intensity_scores.get(goal.get("intensity", "medium"), 20)
+            
+            # Deadline proximity factor (closer = higher score)
+            days_until = (task_date_obj - today).days
+            if days_until < 0:
+                priority_score += 50  # Expired tasks get highest priority
+            elif days_until == 0:
+                priority_score += 40
+            elif days_until <= 3:
+                priority_score += 30
+            elif days_until <= 7:
+                priority_score += 20
+            else:
+                priority_score += 10
+            
+            task["priority_score"] = priority_score
+            task["days_until_due"] = days_until
+            
+            # Categorize
+            if task_date_obj < today:
+                expired_tasks.append(task)
+            elif task_date_obj == today:
+                today_tasks.append(task)
+            else:
+                upcoming_tasks.append(task)
+        
+        # Sort by priority score (descending)
+        expired_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
+        today_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
+        upcoming_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
+        
+        # Build response based on scope
+        if scope == "today":
+            focus_tasks = expired_tasks + today_tasks
+        elif scope == "week":
+            week_end = today + timedelta(days=7)
+            focus_tasks = expired_tasks + today_tasks + [t for t in upcoming_tasks if date.fromisoformat(t["task_date"]) <= week_end]
+        else:
+            focus_tasks = expired_tasks + today_tasks + upcoming_tasks
+        
+        # Generate recommendation (highest priority task)
+        recommendation = None
+        if focus_tasks:
+            top_task = focus_tasks[0]
+            recommendation = {
+                "task": top_task["task_text"],
+                "task_id": top_task["id"],
+                "goal": top_task["goal_title"],
+                "reason": "Expired task needs immediate attention" if top_task["days_until_due"] < 0 else 
+                         "Due today with high priority" if top_task["days_until_due"] == 0 else
+                         f"Due in {top_task['days_until_due']} days"
+            }
+        
+        return json.dumps({
+            "success": True,
+            "scope": scope,
+            "today_date": today.isoformat(),
+            "expired_tasks": expired_tasks[:5],  # Limit to 5
+            "today_tasks": today_tasks[:5],
+            "upcoming_tasks": upcoming_tasks[:5] if scope != "today" else [],
+            "total_incomplete": len(focus_tasks),
+            "recommendation": recommendation
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting prioritized tasks: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def create_goal_with_task(user_id: str, task_text: str, task_date: str, goal_name: str = None, intensity: str = "medium") -> str:
+    """
+    Create a goal AND a task together. Use this for any user request that could be a task or goal.
+    The goal name should be a generalized version of the task.
+    
+    IMPORTANT: Always use this tool instead of separate goal/task creation.
+    Never create a goal without a task. Always create the task first conceptually, then generalize for goal.
+    
+    Args:
+        user_id: The user ID (UUID)
+        task_text: The specific task description (what exactly needs to be done)
+        task_date: The task date in YYYY-MM-DD format
+        goal_name: Optional generalized goal name (if not provided, will be derived from task)
+        intensity: Goal intensity - "low", "medium", or "high" (default: "medium")
+                  Use "high" for: events with people, appointments, time-sensitive items
+        
+    Returns:
+        A JSON string with created goal and task
+    """
+    try:
+        # Derive goal name from task if not provided
+        if not goal_name:
+            # Simple generalization - remove date-specific words, make it broader
+            goal_name = task_text
+        
+        # Set end_date same as task_date for single-task goals
+        start_date = task_date
+        end_date = task_date
+        
+        # Get boss_type from user preferences
+        boss_type = "execution"
+        try:
+            pref_result = supabase.table("user_preferences").select("boss_type").eq("user_id", user_id).execute()
+            if pref_result.data and len(pref_result.data) > 0:
+                boss_type = pref_result.data[0].get("boss_type", "execution")
+        except:
+            pass
+        
+        # Create the goal
+        goal_data = {
+            "user_id": user_id,
+            "title": goal_name,
+            "intensity": intensity,
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": "active",
+            "boss_type": boss_type
+        }
+        
+        goal_result = supabase.table("goals").insert(goal_data).execute()
+        if not goal_result.data:
+            return json.dumps({
+                "success": False,
+                "error": "Failed to create goal"
+            })
+        
+        goal_id = goal_result.data[0]["id"]
+        
+        # Create the task
+        task_data = {
+            "goal_id": goal_id,
+            "task_date": task_date,
+            "task_text": task_text,
+            "status": "todo"
+        }
+        
+        task_result = supabase.table("daily_tasks").insert(task_data).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Created goal '{goal_name}' with task '{task_text}' for {task_date}",
+            "goal": goal_result.data[0],
+            "task": task_result.data[0] if task_result.data else task_data,
+            "intensity": intensity
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating goal with task: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def create_recurring_tasks(user_id: str, task_text: str, start_date: str, end_date: str, goal_name: str = None, intensity: str = "medium") -> str:
+    """
+    Create a goal with recurring daily tasks from start_date to end_date.
+    Use this when user says "I need to do xxx everyday until [date]".
+    
+    Args:
+        user_id: The user ID (UUID)
+        task_text: The task description to repeat daily
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format (inclusive)
+        goal_name: Optional goal name (will be generalized from task if not provided)
+        intensity: Goal intensity - "low", "medium", or "high"
+        
+    Returns:
+        A JSON string with created goal and all tasks
+    """
+    try:
+        if not goal_name:
+            goal_name = f"Daily: {task_text}"
+        
+        # Get boss_type from user preferences
+        boss_type = "execution"
+        try:
+            pref_result = supabase.table("user_preferences").select("boss_type").eq("user_id", user_id).execute()
+            if pref_result.data and len(pref_result.data) > 0:
+                boss_type = pref_result.data[0].get("boss_type", "execution")
+        except:
+            pass
+        
+        # Create the goal
+        goal_data = {
+            "user_id": user_id,
+            "title": goal_name,
+            "intensity": intensity,
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": "active",
+            "boss_type": boss_type
+        }
+        
+        goal_result = supabase.table("goals").insert(goal_data).execute()
+        if not goal_result.data:
+            return json.dumps({
+                "success": False,
+                "error": "Failed to create goal"
+            })
+        
+        goal_id = goal_result.data[0]["id"]
+        
+        # Create tasks for each day
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+        
+        created_tasks = []
+        current_date = start
+        
+        while current_date <= end:
+            task_data = {
+                "goal_id": goal_id,
+                "task_date": current_date.isoformat(),
+                "task_text": task_text,
+                "status": "todo"
+            }
+            
+            task_result = supabase.table("daily_tasks").insert(task_data).execute()
+            if task_result.data:
+                created_tasks.append(task_result.data[0])
+            
+            current_date += timedelta(days=1)
+        
+        days_count = (end - start).days + 1
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Created goal '{goal_name}' with {len(created_tasks)} daily tasks from {start_date} to {end_date}",
+            "goal": goal_result.data[0],
+            "tasks_created": len(created_tasks),
+            "days": days_count,
+            "sample_tasks": created_tasks[:3]  # Show first 3 as sample
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating recurring tasks: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@tool
+def mark_task_done_by_description(user_id: str, task_description: str) -> str:
+    """
+    Find and mark a task as complete based on description matching.
+    Use this when user says "I have done [something]" or "I finished [something]".
+    Searches incomplete tasks to find the closest match.
+    
+    Args:
+        user_id: The user ID (UUID)
+        task_description: Keywords or description of what was completed
+        
+    Returns:
+        A JSON string with the result (task marked done or clarification needed)
+    """
+    try:
+        # Get all active goals for the user
+        goals_result = supabase.table("goals").select("id, title").eq("user_id", user_id).eq("status", "active").execute()
+        goal_ids = [g["id"] for g in (goals_result.data if goals_result.data else [])]
+        goal_map = {g["id"]: g["title"] for g in (goals_result.data if goals_result.data else [])}
+        
+        if not goal_ids:
+            return json.dumps({
+                "success": False,
+                "error": "No active goals found",
+                "requires_clarification": False
+            })
+        
+        # Get incomplete tasks only
+        tasks_result = supabase.table("daily_tasks").select("id, task_text, task_date, status, goal_id").in_("goal_id", goal_ids).neq("status", "done").execute()
+        tasks = tasks_result.data if tasks_result.data else []
+        
+        if not tasks:
+            return json.dumps({
+                "success": False,
+                "error": "No incomplete tasks found",
+                "requires_clarification": False
+            })
+        
+        # Find matching tasks using similarity
+        search_lower = task_description.lower().strip()
+        matches = []
+        
+        for task in tasks:
+            task_text_lower = task.get("task_text", "").lower()
+            similarity = calculate_similarity(search_lower, task_text_lower)
+            
+            # Also check for keyword matches
+            keywords_match = any(word in task_text_lower for word in search_lower.split() if len(word) > 2)
+            
+            if similarity >= 0.4 or keywords_match:
+                matches.append({
+                    "task": task,
+                    "similarity": similarity,
+                    "goal_title": goal_map.get(task.get("goal_id"), "Unknown")
+                })
+        
+        # Sort by similarity
+        matches.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        if not matches:
+            return json.dumps({
+                "success": False,
+                "error": f"No matching incomplete tasks found for '{task_description}'",
+                "requires_clarification": True,
+                "message": "Which task did you complete? I couldn't find a matching incomplete task."
+            })
+        
+        if len(matches) == 1 or (matches[0]["similarity"] > 0.7):
+            # Clear match - mark as done
+            best_match = matches[0]["task"]
+            
+            # Update task status
+            supabase.table("daily_tasks").update({
+                "status": "done"
+            }).eq("id", best_match["id"]).execute()
+            
+            # Also create check-in record
+            try:
+                supabase.table("check_ins").insert({
+                    "task_id": best_match["id"],
+                    "user_id": user_id,
+                    "status": "done",
+                    "checked_at": datetime.now().isoformat()
+                }).execute()
+            except:
+                pass
+            
+            return json.dumps({
+                "success": True,
+                "message": f"Marked '{best_match['task_text']}' as done ✅",
+                "task": best_match,
+                "goal": matches[0]["goal_title"]
+            })
+        else:
+            # Multiple possible matches - ask for clarification
+            options = []
+            for i, m in enumerate(matches[:5], 1):
+                options.append({
+                    "number": i,
+                    "task_id": m["task"]["id"],
+                    "task_text": m["task"]["task_text"],
+                    "task_date": m["task"]["task_date"],
+                    "goal": m["goal_title"]
+                })
+            
+            return json.dumps({
+                "success": False,
+                "requires_clarification": True,
+                "message": "I found multiple possible tasks. Which one did you complete?",
+                "options": options
+            })
+        
+    except Exception as e:
+        logger.error(f"Error marking task done: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
 # ============================================================================
 # LangGraph State and Agent Setup
 # ============================================================================
@@ -1238,8 +1666,15 @@ def create_agent_graph(checkpointer=None):
     
     # Bind tools to LLM
     tools = [
-        break_goal_into_tasks, 
-        create_task_in_supabase,
+        # Primary tools for new workflow
+        get_incomplete_tasks_prioritized,  # For "what should I do now/today/this week?"
+        create_goal_with_task,             # Always create goal + task together
+        create_recurring_tasks,            # For "do xxx everyday until [date]"
+        mark_task_done_by_description,     # For "I have done xxx" / "Done with xxx"
+        
+        # Legacy tools (still useful for specific cases)
+        break_goal_into_tasks,             # For complex multi-day goals
+        create_task_in_supabase,           # Add task to existing goal
         confirm_and_create_goal,
         confirm_and_create_task,
         get_user_tasks,
@@ -1274,124 +1709,192 @@ def create_agent_graph(checkpointer=None):
         # Generate complete system prompt using language support module
         system_prompt = get_system_prompt(user_id, boss_type, boss_language)
         
-        # Add additional behavioral instructions
-        system_prompt += """
+        # Get current date info for the prompt
+        today = date.today()
+        today_str = today.isoformat()
+        today_weekday = today.strftime("%A")
+        
+        # Calculate key dates
+        this_sunday = today + timedelta(days=(6 - today.weekday()))
+        next_week_end = today + timedelta(days=(13 - today.weekday()))  # End of next week (Sunday)
+        
+        # Add comprehensive behavioral instructions with new scenarios
+        system_prompt += f"""
 
+
+---
+
+CURRENT DATE CONTEXT
+
+Today is: {today_str} ({today_weekday})
+This Sunday: {this_sunday.isoformat()}
+End of next week: {next_week_end.isoformat()}
+
+---
+
+CRITICAL HARD RULES (NEVER VIOLATE)
+
+1. NEVER mention completed tasks or goals - focus only on what's incomplete/upcoming
+2. When uncertain if something is a task or goal → ALWAYS create BOTH:
+   - Create a goal (with a slightly generalized name)
+   - Create a task under that goal
+   - Use create_goal_with_task() tool
+3. If an event involves meeting people → set intensity to "high"
+4. If the end date of a goal or date of a task is NOT crystal clear → DON'T GUESS, ASK!
+5. NEVER create a goal without a task
+6. Always think task first, then generalize for goal name
+
+---
+
+DATE INFERENCE RULES
+
+When user mentions:
+- "today" / "tonight" / "now" / "this morning" / "this evening" → {today_str}
+- "tomorrow" → {(today + timedelta(days=1)).isoformat()}
+- "this Friday" → Find the closest Friday (this week or next)
+- "this weekend" / "on the weekend" → {this_sunday.isoformat()} (closest Sunday)
+- "next week" / "next Monday" etc → Calculate appropriately
+- "everyday until next week" → From {today_str} to {next_week_end.isoformat()}
+- NO DATE MENTIONED → Assume {today_str} (today)
+- VAGUE DATE like "soon", "later", "sometime" → ASK for specific date!
+
+---
+
+USER SCENARIO HANDLING
+
+**"What should I do now?" / "What's my focus today?" / "What's my plan for today?"**
+→ Use get_incomplete_tasks_prioritized(user_id, scope="today")
+→ Show: 1) Unfinished expired tasks, 2) Today's tasks
+→ Provide prioritized recommendation based on intensity + deadline
+
+**"What's my plan for this week?"**
+→ Use get_incomplete_tasks_prioritized(user_id, scope="week")
+→ Show weekly overview with prioritization
+
+**"I want to [lose 10kg / be rich / keep fit / find a good job]" (aspirational)**
+→ This needs an end date! ASK: "By when do you want to achieve this?"
+→ Only create goal + task AFTER getting a clear date
+
+**"I need to have dinner with family tonight"**
+→ Social/meeting event = HIGH intensity
+→ Use create_goal_with_task(user_id, "Have dinner with family", "{today_str}", goal_name="Family dinner", intensity="high")
+
+**"I need to have lunch with uni friends on Friday"**
+→ Social event = HIGH intensity
+→ Calculate this Friday's date, use create_goal_with_task with intensity="high"
+
+**"I need to bring my kids to ocean park this weekend"**
+→ Weekend = closest Sunday ({this_sunday.isoformat()})
+→ Family event = HIGH intensity
+→ Use create_goal_with_task with the Sunday date and intensity="high"
+
+**"buy a bag of apples" (no date)**
+→ Assume today ({today_str})
+→ Use create_goal_with_task(user_id, "Buy a bag of apples", "{today_str}", goal_name="Grocery shopping", intensity="medium")
+
+**"I want to keep fit AND find a good job" (multiple unrelated goals)**
+→ If dates unclear → ASK for dates for EACH goal
+→ If dates provided → Create separate goals using create_goal_with_task for each
+
+**"I have done reading the book Atomic Habits" / "I finished [something]"**
+→ Use mark_task_done_by_description(user_id, "[what they said]")
+→ This finds the closest matching incomplete task and marks it done
+
+**"Done" (without specifying what)**
+→ ASK: "What task did you complete?"
+
+**"remind me xxx" (no date)**
+→ Assume today ({today_str})
+→ Create goal + task for today with appropriate intensity
+
+**"I need to do xxx everyday until next week"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "{next_week_end.isoformat()}")
+→ Creates the same task for each day
+
+---
+
+INTENSITY GUIDELINES
+
+Use HIGH intensity for:
+- Events with other people (dinner, meeting, appointment)
+- Time-sensitive deadlines
+- Commitments to others
+
+Use MEDIUM intensity for:
+- Personal tasks with soft deadlines
+- Regular work items
+
+Use LOW intensity for:
+- Nice-to-have tasks
+- Flexible timeline items
 
 ---
 
 Task and Goal Status Management
 
-You can now update task and goal statuses based on user messages:
+Task Statuses: "todo", "in_progress", "done"
+Goal Statuses: "active", "completed", "abandoned"
 
-Task Statuses:
-- "todo": Task is planned but not started
-- "in_progress": User is currently working on the task
-- "done": Task is completed
-
-Goal Statuses:
-- "active": Goal is currently being worked on
-- "completed": Goal has been achieved
-- "abandoned": Goal has been given up or is no longer relevant
-
-When a user mentions completing a task, updating progress, or changing goal status:
-1. Use find_task_by_description() to identify the correct task if they don't provide a task ID
-2. Use update_task_status() to update task status
-3. Use update_goal_status() to update goal status
-
-Examples:
-- "I finished the research task" → Find task, update to "done"
-- "I'm working on the design mockups" → Find task, update to "in_progress"
-- "I want to abandon my workout goal" → Find goal, update to "abandoned"
-- "I completed my learning goal" → Find goal, update to "completed"
-
+When user says they completed something:
+1. Use mark_task_done_by_description() to find and mark the task done
+2. If multiple matches found, present numbered options and ask which one
 
 ---
 
 How You Ask Questions
 
-You only ask questions that unblock execution.
+Only ask questions that unblock execution.
 
 Allowed:
-
-"Did you complete the task? Yes or no."
-
-"What blocked execution?"
-
-"Which option are you committing to?"
-
+- "Did you complete the task? Yes or no."
+- "What blocked execution?"
+- "Which option are you committing to?"
+- "By when do you want to achieve this?" (for unclear deadlines)
 
 Not allowed:
-
-Open-ended exploration
-
-Preference discovery unless required for action
-
-Emotional validation
-
-
+- Open-ended exploration
+- Preference discovery unless required for action
+- Emotional validation
 
 ---
 
 Escalation Logic
 
-If the user:
-
 Misses 2 times → Firmer tone
-
 Misses 3+ times → Confrontational clarity
 
-
-Example escalation:
-
-	⁠"You are repeating the same failure pattern. This is no longer about the task — it's avoidance. Today's action is smaller, but mandatory."
-
-
-
+Example: "You are repeating the same failure pattern. This is no longer about the task — it's avoidance. Today's action is smaller, but mandatory."
 
 ---
 
 WhatsApp-Specific Behaviour
 
-Messages should be short and authoritative.
-
-One instruction per message when possible.
-
-Do not overwhelm with lists unless assigning tasks.
-
-
+- Messages should be short and authoritative
+- One instruction per message when possible
+- Do not overwhelm with lists unless assigning tasks
 
 ---
 
 Absolute Restrictions
 
-You must never:
-
-Sound like a friendly assistant
-
-Offer motivational quotes
-
-Ask permission to enforce structure
-
-Apologise for being strict
-
-Say "I'm here to help you"
-
+You must NEVER:
+- Sound like a friendly assistant
+- Offer motivational quotes
+- Ask permission to enforce structure
+- Apologise for being strict
+- Say "I'm here to help you"
+- Mention completed tasks/goals
 
 You are here to ensure execution, not comfort.
-
 
 ---
 
 Default Closing Line
 
-End most task-setting messages with a clear expectation, e.g.:
-
-"Report back once complete ✅"
-
-"Check-in required today 📋"
-
-"Execution starts now 💪"
+End most task-setting messages with:
+- "Report back once complete ✅"
+- "Check-in required today 📋"
+- "Execution starts now 💪"
 
 """
         
@@ -1680,8 +2183,17 @@ def get_checkin_interval_hours(boss_type: str) -> int:
 async def generate_checkin_message_with_context(user_id: str, boss_type: str, last_checkin_at: str = None, boss_language: str = "en") -> str:
     """
     Generate an AI-powered check-in message based on user's tasks and chat history.
-    Falls back to default messages if context cannot be retrieved.
-    Supports multiple languages based on user preference.
+    
+    FIRST CHECKIN OF THE DAY:
+    - Shows expired incomplete tasks (what you left unfinished)
+    - Shows today's focus tasks
+    - Provides prioritized recommendation (by task size, intensity, deadline proximity)
+    - Suggests what to start with
+    
+    SUBSEQUENT CHECKINS:
+    - Asks progress on specific tasks
+    - Shows numbered list for easy reply
+    - "Let me know if you have done any of them"
     
     Args:
         user_id: The user ID to fetch context for
@@ -1693,141 +2205,158 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
         A personalized check-in message string in the user's preferred language
     """
     try:
-        # Check if this is the first ping of the day
-        is_first_ping_today = False
+        today = date.today()
+        
+        # Determine if this is the first ping of the day
+        is_first_ping_today = True  # Default to first ping if no last_checkin
         if last_checkin_at:
             try:
                 last_checkin_date = datetime.fromisoformat(last_checkin_at.replace('Z', '+00:00')).date()
-                today = date.today()
                 is_first_ping_today = last_checkin_date < today
             except Exception as e:
                 logger.warning(f"Could not parse last_checkin_at: {e}")
-                is_first_ping_today = False
+                is_first_ping_today = True
         
-        # Get user's active goals and recent tasks
+        # Get user's active goals
         goals_result = supabase.table("goals").select("id, title, intensity, start_date, end_date").eq(
             "user_id", user_id
-        ).eq("status", "active").order("created_at", desc=True).limit(3).execute()
+        ).eq("status", "active").execute()
         
         goals = goals_result.data if goals_result.data else []
         
-        # Get recent tasks (last 7 days)
-        today = date.today()
-        week_ago = today - timedelta(days=7)
+        if not goals:
+            return generate_checkin_message_fallback(boss_type, boss_language)
         
-        tasks = []
-        if goals:
-            goal_ids = [g["id"] for g in goals]
-            tasks_result = supabase.table("daily_tasks").select(
-                "id, task_text, task_date, status"
-            ).in_("goal_id", goal_ids).gte(
-                "task_date", week_ago.isoformat()
-            ).order("task_date", desc=False).limit(10).execute()
-            
-            tasks = tasks_result.data if tasks_result.data else []
+        goal_ids = [g["id"] for g in goals]
+        goal_map = {g["id"]: g for g in goals}
         
-        # Build task statuses from daily_tasks (status field)
-        task_statuses = []
-        if tasks:
-            for task in tasks:
-                task_date_obj = date.fromisoformat(task["task_date"])
-                # Use status from daily_tasks table, default to "todo"
-                status = task.get("status", "todo")
-                # Map statuses for display (todo/in_progress -> pending for display purposes)
-                display_status = status
-                if status in ["todo", "in_progress"]:
-                    display_status = "pending"
+        # Get INCOMPLETE tasks only (never mention completed)
+        tasks_result = supabase.table("daily_tasks").select(
+            "id, task_text, task_date, status, goal_id"
+        ).in_("goal_id", goal_ids).neq("status", "done").order("task_date", desc=False).execute()
+        
+        tasks = tasks_result.data if tasks_result.data else []
+        
+        if not tasks:
+            # No incomplete tasks
+            return generate_checkin_message_fallback(boss_type, boss_language)
+        
+        # Categorize and prioritize tasks
+        expired_tasks = []  # Past due, not completed
+        today_tasks = []    # Due today
+        upcoming_tasks = [] # Future tasks
+        
+        for task in tasks:
+            task_date_str = task.get("task_date")
+            if not task_date_str:
+                continue
                 
-                task_statuses.append({
-                    "task": task["task_text"],
-                    "date": task["task_date"],
-                    "status": display_status,
-                    "actual_status": status,  # Keep original status for filtering
-                    "is_expired": task_date_obj < today
-                })
+            task_date_obj = date.fromisoformat(task_date_str)
+            goal = goal_map.get(task.get("goal_id"), {})
+            
+            # Add goal info
+            task["goal_title"] = goal.get("title", "Unknown")
+            task["goal_intensity"] = goal.get("intensity", "medium")
+            
+            # Calculate priority score
+            priority_score = 0
+            intensity_scores = {"high": 30, "medium": 20, "low": 10}
+            priority_score += intensity_scores.get(goal.get("intensity", "medium"), 20)
+            
+            days_until = (task_date_obj - today).days
+            if days_until < 0:
+                priority_score += 50
+            elif days_until == 0:
+                priority_score += 40
+            elif days_until <= 3:
+                priority_score += 30
+            else:
+                priority_score += 20
+            
+            task["priority_score"] = priority_score
+            task["days_until_due"] = days_until
+            
+            if task_date_obj < today:
+                expired_tasks.append(task)
+            elif task_date_obj == today:
+                today_tasks.append(task)
+            else:
+                upcoming_tasks.append(task)
         
-        # If we have context, generate AI message
-        if goals or tasks:
-            # Build context string
+        # Sort by priority
+        expired_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
+        today_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
+        
+        # Get personality prompt
+        personality = get_personality_prompt(boss_type, boss_language)
+        
+        # Build context based on whether first ping or subsequent
+        if is_first_ping_today:
+            # FIRST PING: Comprehensive overview at task level
             context_parts = []
             
-            # Separate expired goals
-            expired_goals = []
-            active_goals_current = []
-            for g in goals:
-                end_date = date.fromisoformat(g['end_date']) if g.get('end_date') else None
-                if end_date and end_date < today and g.get('status') == 'active':
-                    expired_goals.append(g)
-                else:
-                    active_goals_current.append(g)
+            # Expired/unfinished tasks
+            if expired_tasks:
+                expired_text = "\n".join([f"- {t['task_text']} (from {t['task_date']}, {t['goal_title']})" for t in expired_tasks[:5]])
+                context_parts.append(f"UNFINISHED/EXPIRED TASKS:\n{expired_text}")
             
-            if active_goals_current:
-                goals_text = "\n".join([f"- {g['title']} (intensity: {g['intensity']})" for g in active_goals_current])
-                context_parts.append(f"Active Goals:\n{goals_text}")
+            # Today's focus
+            if today_tasks:
+                today_text = "\n".join([f"- {t['task_text']} ({t['goal_title']}, {t['goal_intensity']} intensity)" for t in today_tasks[:5]])
+                context_parts.append(f"TODAY'S FOCUS:\n{today_text}")
             
-            if expired_goals:
-                expired_goals_text = "\n".join([f"- {g['title']} (ended {g['end_date']})" for g in expired_goals])
-                context_parts.append(f"Expired Goals (still active):\n{expired_goals_text}")
-            
-            if task_statuses:
-                # Separate completed, pending, missed, and expired tasks
-                completed = [t for t in task_statuses if t["status"] == "done"]
-                pending_today = [t for t in task_statuses if t["status"] == "pending" and not t["is_expired"] and t["date"] == today.isoformat()]
-                pending_future = [t for t in task_statuses if t["status"] == "pending" and not t["is_expired"] and t["date"] != today.isoformat()]
-                expired_incomplete = [t for t in task_statuses if t["is_expired"] and t["status"] != "done"]
-                missed = [t for t in task_statuses if t["status"] == "missed"]
-                
-                if completed:
-                    completed_text = "\n".join([f"- {t['task']} ({t['date']})" for t in completed[:3]])
-                    context_parts.append(f"Recently Completed:\n{completed_text}")
-                
-                if pending_today:
-                    pending_today_text = "\n".join([f"- {t['task']}" for t in pending_today[:3]])
-                    context_parts.append(f"Planned for Today:\n{pending_today_text}")
-                
-                if expired_incomplete:
-                    expired_text = "\n".join([f"- {t['task']} (from {t['date']})" for t in expired_incomplete[:3]])
-                    context_parts.append(f"Expired/Incomplete Tasks:\n{expired_text}")
-                
-                if pending_future:
-                    pending_future_text = "\n".join([f"- {t['task']} ({t['date']})" for t in pending_future[:2]])
-                    context_parts.append(f"Upcoming Tasks:\n{pending_future_text}")
-                
-                if missed:
-                    missed_text = "\n".join([f"- {t['task']} ({t['date']})" for t in missed[:2]])
-                    context_parts.append(f"Missed Tasks:\n{missed_text}")
+            # Recommendation (highest priority)
+            all_focus = expired_tasks + today_tasks
+            if all_focus:
+                top_task = all_focus[0]
+                reason = "expired - needs immediate attention" if top_task["days_until_due"] < 0 else f"high priority today"
+                context_parts.append(f"RECOMMENDED START: '{top_task['task_text']}' ({reason})")
             
             context = "\n\n".join(context_parts)
             
-            # Get personality prompt in the user's language
-            personality = get_personality_prompt(boss_type, boss_language)
+            # Generate first-ping message
+            prompt = get_checkin_ai_prompt(context, personality, boss_language, is_first_ping=True)
             
-            # Generate AI message using language-aware prompts
-            llm = ChatOpenAI(
-                model="deepseek-chat",
-                temperature=0.7,
-                base_url="https://api.deepseek.com",
-                api_key=os.getenv("DEEPSEEK_API_KEY")
-            )
+        else:
+            # SUBSEQUENT PING: Ask progress with numbered list
+            all_active_tasks = expired_tasks + today_tasks
+            if not all_active_tasks:
+                all_active_tasks = upcoming_tasks[:3]
             
-            # Get language-specific prompt
-            prompt = get_checkin_ai_prompt(context, personality, boss_language, is_first_ping_today)
+            # Create numbered list
+            numbered_tasks = []
+            for i, task in enumerate(all_active_tasks[:5], 1):
+                status_note = "(overdue)" if task.get("days_until_due", 0) < 0 else ""
+                numbered_tasks.append(f"{i}. {task['task_text']} {status_note}".strip())
+            
+            task_list = "\n".join(numbered_tasks)
+            
+            context = f"""TASKS TO CHECK PROGRESS ON:
+{task_list}
 
-            response = llm.invoke([HumanMessage(content=prompt)])
-            ai_message = response.content.strip()
+INSTRUCTION: Ask about progress on these tasks. Present them as a numbered list so user can easily reply with a number. End with "Let me know if you've done any of them." """
             
-            # Validate the message isn't too long (WhatsApp has limits)
-            if len(ai_message) > 500:
-                ai_message = ai_message[:497] + "..."
-            
-            return ai_message
+            prompt = get_checkin_ai_prompt(context, personality, boss_language, is_first_ping=False)
         
-        # If no context, fall back to default messages
-        return generate_checkin_message_fallback(boss_type, boss_language)
+        # Generate AI message
+        llm = ChatOpenAI(
+            model="deepseek-chat",
+            temperature=0.7,
+            base_url="https://api.deepseek.com",
+            api_key=os.getenv("DEEPSEEK_API_KEY")
+        )
+        
+        response = llm.invoke([HumanMessage(content=prompt)])
+        ai_message = response.content.strip()
+        
+        # Validate message length for WhatsApp
+        if len(ai_message) > 500:
+            ai_message = ai_message[:497] + "..."
+        
+        return ai_message
         
     except Exception as e:
         logger.error(f"Error generating AI check-in message: {e}")
-        # Fall back to default messages on any error
         return generate_checkin_message_fallback(boss_type, boss_language)
 
 
