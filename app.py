@@ -25,7 +25,9 @@ from language_prompts import (
     get_checkin_message,
     get_checkin_ai_prompt,
     get_personality_prompt,
-    get_language_name
+    get_language_name,
+    get_first_message_greeting,
+    get_boss_name
 )
 
 load_dotenv()
@@ -2017,13 +2019,6 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
         # Prepare config with thread_id for persistence
         config = {"configurable": {"thread_id": thread_id}}
         
-        # Prepare initial state with new message
-        # If checkpointer is enabled, previous messages will be loaded automatically
-        initial_state = {
-            "messages": [HumanMessage(content=user_message)],
-            "user_id": user_id
-        }
-        
         # Get or create checkpointer connection
         checkpointer_instance = None
         if supabase_checkpointer:
@@ -2032,6 +2027,51 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
                 # Initialize connection if not already done
                 await supabase_checkpointer.setup_connection()
                 checkpointer_instance = supabase_checkpointer.checkpointer
+        
+        # Check if this is the first ever message by querying the checkpointer
+        is_first_message = False
+        if checkpointer_instance:
+            try:
+                # Try to get the state history for this thread
+                state_history = [state async for state in checkpointer_instance.alist(config)]
+                
+                # If there's no history, this is the first message
+                if not state_history or len(state_history) == 0:
+                    is_first_message = True
+                    logger.info(f"First message detected for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Could not check message history: {e}. Assuming not first message.")
+                is_first_message = False
+        
+        # If this is the first message, greet the user with their boss profile
+        if is_first_message:
+            try:
+                # Get user's boss_type and boss_language from user_preferences
+                pref_result = supabase.table("user_preferences").select("boss_type, boss_language").eq("user_id", user_id).execute()
+                
+                boss_type = "execution"  # default
+                boss_language = "en"  # default
+                
+                if pref_result.data and len(pref_result.data) > 0:
+                    boss_type = pref_result.data[0].get("boss_type", "execution")
+                    boss_language = pref_result.data[0].get("boss_language", "en")
+                
+                # Get the greeting message
+                greeting = get_first_message_greeting(boss_type, boss_language)
+                
+                logger.info(f"Sending first message greeting for user {user_id}, boss: {get_boss_name(boss_type)}")
+                return greeting
+                
+            except Exception as e:
+                logger.error(f"Error getting boss profile for first message: {e}")
+                # Fall through to normal processing if there's an error
+        
+        # Prepare initial state with new message
+        # If checkpointer is enabled, previous messages will be loaded automatically
+        initial_state = {
+            "messages": [HumanMessage(content=user_message)],
+            "user_id": user_id
+        }
         
         # Create agent graph with checkpointer
         agent_graph = create_agent_graph(checkpointer=checkpointer_instance)

@@ -768,6 +768,124 @@ Generate ONLY the check-in message in English:"""
 }
 
 # ============================================================================
+# Boss Names
+# ============================================================================
+
+BOSS_NAMES = {
+    "execution": "Clio",
+    "supportive": "Pip",
+    "mentor": "Mori",
+    "drill-sergeant": "Bolt"
+}
+
+# ============================================================================
+# First Message Greetings by Boss Type and Language
+# ============================================================================
+
+FIRST_MESSAGE_GREETINGS = {
+    "en": {
+        "execution": """Hey, I'm Clio. I'm here to make sure you actually get things done.
+
+I don't do fluff. You tell me what you need to do, I'll hold you to it. Simple as that.
+
+What's on your plate today?""",
+        
+        "supportive": """Hi! I'm Pip, and I'm here to help you stay on track.
+
+I believe you can do this. I'll be checking in, keeping you accountable, but also cheering you on along the way.
+
+What are you working on today?""",
+        
+        "mentor": """Hello, I'm Mori. I'm here to guide you through your commitments.
+
+Think of me as someone who'll help you understand not just what you need to do, but why it matters. Together we'll build better habits.
+
+What would you like to accomplish today?""",
+        
+        "drill-sergeant": """Listen up. I'm Bolt, and I'm here to push you hard.
+
+I don't accept excuses. I don't accept "I'll try." You commit, you deliver. That's how this works.
+
+What are you committing to today?"""
+    },
+    "zh-TW": {
+        "execution": """嘿，我是 Clio。我在這裡確保你真的把事情做完。
+
+我不講廢話。你告訴我你要做什麼，我會要你負責。就這麼簡單。
+
+你今天要做什麼？""",
+        
+        "supportive": """嗨！我是 Pip，我在這裡幫你保持正軌。
+
+我相信你可以做到。我會定期簽到，讓你保持責任感，但也會在路上為你加油。
+
+你今天在做什麼？""",
+        
+        "mentor": """你好，我是 Mori。我在這裡引導你完成承諾。
+
+把我想成能幫你理解不僅是你需要做什麼，而是為什麼重要的人。我們一起建立更好的習慣。
+
+你今天想完成什麼？""",
+        
+        "drill-sergeant": """聽好了。我是 Bolt，我在這裡嚴格要求你。
+
+我不接受藉口。我不接受「我試試看」。你承諾了，你就要交付。就是這樣。
+
+你今天要承諾什麼？"""
+    },
+    "zh-CN": {
+        "execution": """嘿，我是 Clio。我在这里确保你真的把事情做完。
+
+我不讲废话。你告诉我你要做什么，我会要你负责。就这么简单。
+
+你今天要做什么？""",
+        
+        "supportive": """嗨！我是 Pip，我在这里帮你保持正轨。
+
+我相信你可以做到。我会定期签到，让你保持责任感，但也会在路上为你加油。
+
+你今天在做什么？""",
+        
+        "mentor": """你好，我是 Mori。我在这里引导你完成承诺。
+
+把我想成能帮你理解不仅是你需要做什么，而是为什么重要的人。我们一起建立更好的习惯。
+
+你今天想完成什么？""",
+        
+        "drill-sergeant": """听好了。我是 Bolt，我在这里严格要求你。
+
+我不接受借口。我不接受「我试试看」。你承诺了，你就要交付。就是这样。
+
+你今天要承诺什么？"""
+    },
+    "zh-HK": {
+        "execution": """喂，我係 Clio。我喺度確保你真係做完啲嘢。
+
+我唔講廢話。你話畀我知你要做乜，我會要你負責。就係咁簡單。
+
+你今日要做乜？""",
+        
+        "supportive": """Hi！我係 Pip，我喺度幫你保持正軌。
+
+我相信你做得到。我會定期簽到，令你保持責任感，但都會喺路上幫你打氣。
+
+你今日做緊乜？""",
+        
+        "mentor": """Hello，我係 Mori。我喺度引導你完成承諾。
+
+將我諗成能幫你明白唔只係你需要做乜，而係點解重要嘅人。我哋一齊建立更好嘅習慣。
+
+你今日想完成乜？""",
+        
+        "drill-sergeant": """聽好喇。我係 Bolt，我喺度嚴格要求你。
+
+我唔接受藉口。我唔接受「我試下」。你承諾咗，你就要交貨。就係咁。
+
+你今日要承諾乜？"""
+    }
+}
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -831,3 +949,12 @@ def get_checkin_ai_prompt(context: str, personality: str, language: str = "en", 
 def get_language_name(language_code: str) -> str:
     """Get the display name for a language code."""
     return LANGUAGE_NAMES.get(language_code, "English")
+
+def get_boss_name(boss_type: str) -> str:
+    """Get the boss name for a specific boss type."""
+    return BOSS_NAMES.get(boss_type, "Clio")
+
+def get_first_message_greeting(boss_type: str, language: str = "en") -> str:
+    """Get the first message greeting for a specific boss type and language."""
+    greetings = FIRST_MESSAGE_GREETINGS.get(language, FIRST_MESSAGE_GREETINGS["en"])
+    return greetings.get(boss_type, greetings["execution"])
