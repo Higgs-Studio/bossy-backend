@@ -2058,7 +2058,7 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
                     logger.warning(f"Could not check message history: {e}. Assuming not first message.")
                 is_first_message = False
         
-        # If this is the first message, greet the user with their boss profile
+        # If this is the first message, return greeting and save to history
         if is_first_message:
             try:
                 # Get user's boss_type and boss_language from user_preferences
@@ -2075,6 +2075,42 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
                 greeting = get_first_message_greeting(boss_type, boss_language)
                 
                 logger.info(f"Sending first message greeting for user {user_id}, boss: {get_boss_name(boss_type)}")
+                
+                # Save the first greeting conversation to checkpointer if available
+                if checkpointer_instance:
+                    try:
+                        # Create initial state with the greeting conversation already in it
+                        # The graph will process this and save it to the checkpointer
+                        greeting_state = {
+                            "messages": [
+                                HumanMessage(content=user_message),
+                                AIMessage(content=greeting)
+                            ],
+                            "user_id": user_id
+                        }
+                        
+                        # Create agent graph
+                        temp_graph = create_agent_graph(checkpointer=checkpointer_instance)
+                        
+                        try:
+                            # Invoke the graph which will:
+                            # 1. Save the user message and greeting to checkpointer
+                            # 2. Potentially generate another response (which we'll ignore)
+                            # The important part is that the greeting gets saved in history
+                            await temp_graph.ainvoke(greeting_state, config=config)
+                            logger.info(f"First message conversation with greeting saved to checkpointer for user {user_id}")
+                        except Exception as invoke_error:
+                            error_msg = str(invoke_error).lower()
+                            if 'relation' in error_msg and 'does not exist' in error_msg:
+                                logger.error(f"Could not save first message - database tables not created: {invoke_error}")
+                            else:
+                                logger.warning(f"Could not save first message to checkpointer: {invoke_error}")
+                            # Continue anyway, greeting will still be sent
+                        
+                    except Exception as checkpoint_error:
+                        logger.warning(f"Error setting up checkpoint for first message: {checkpoint_error}")
+                        # Continue anyway
+                
                 return greeting
                 
             except Exception as e:
