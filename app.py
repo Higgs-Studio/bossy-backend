@@ -2022,11 +2022,21 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
         # Get or create checkpointer connection
         checkpointer_instance = None
         if supabase_checkpointer:
-            checkpointer_instance = supabase_checkpointer.checkpointer
-            if not checkpointer_instance:
-                # Initialize connection if not already done
-                await supabase_checkpointer.setup_connection()
+            try:
                 checkpointer_instance = supabase_checkpointer.checkpointer
+                if not checkpointer_instance:
+                    # Initialize connection if not already done
+                    await supabase_checkpointer.setup_connection()
+                    checkpointer_instance = supabase_checkpointer.checkpointer
+            except Exception as e:
+                # Handle case where database tables don't exist or connection fails
+                error_msg = str(e).lower()
+                if 'relation' in error_msg and 'does not exist' in error_msg:
+                    logger.error(f"Database tables not created. Please run database migrations. Error: {e}")
+                else:
+                    logger.error(f"Failed to setup checkpointer connection: {e}")
+                logger.warning("Falling back to non-persistent mode (no conversation history)")
+                checkpointer_instance = None
         
         # Check if this is the first ever message by querying the checkpointer
         is_first_message = False
@@ -2040,7 +2050,12 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
                     is_first_message = True
                     logger.info(f"First message detected for user {user_id}")
             except Exception as e:
-                logger.warning(f"Could not check message history: {e}. Assuming not first message.")
+                error_msg = str(e).lower()
+                if 'relation' in error_msg and 'does not exist' in error_msg:
+                    logger.error(f"Database tables not created. Cannot check message history. Error: {e}")
+                    checkpointer_instance = None  # Disable checkpointer for this request
+                else:
+                    logger.warning(f"Could not check message history: {e}. Assuming not first message.")
                 is_first_message = False
         
         # If this is the first message, greet the user with their boss profile
@@ -2078,8 +2093,20 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
         
         # Run the agent with config for persistence (async if checkpointer is async)
         if checkpointer_instance:
-            # Use ainvoke for async checkpointer
-            result = await agent_graph.ainvoke(initial_state, config=config)
+            try:
+                # Use ainvoke for async checkpointer
+                result = await agent_graph.ainvoke(initial_state, config=config)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if 'relation' in error_msg and 'does not exist' in error_msg:
+                    logger.error(f"Database tables not created during agent invocation. Error: {e}")
+                    logger.warning("Falling back to non-persistent mode for this request")
+                    # Recreate graph without checkpointer and retry
+                    agent_graph = create_agent_graph(checkpointer=None)
+                    result = agent_graph.invoke(initial_state, config=config)
+                else:
+                    # Re-raise other errors
+                    raise
         else:
             # Use invoke for sync (no checkpointer)
             result = agent_graph.invoke(initial_state, config=config)
