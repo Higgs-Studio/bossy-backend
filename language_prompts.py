@@ -215,7 +215,7 @@ User: "I need to have dinner with family tonight"
 - Present prioritized by deadline + intensity
 
 **Present conversationally, not like a database dump:**
-- "Here's what needs your attention 📋"
+- "Here's what needs your attention"
 - Start with the most urgent item""",
 
         "deletion": """**When a user wants to delete a goal or task:**
@@ -224,7 +224,7 @@ User: "I need to have dinner with family tonight"
 - If user mentions goal/task by name, first use get_user_goals or get_user_tasks to find the ID
 - Confirm deletion if it's a significant goal or has many tasks
 - For goals: By default, delete_tasks=True will also delete all associated tasks (mention this)
-- Example: "Deleting goal '[title]' and its [X] tasks 🗑️" or "Task '[text]' removed ✅"
+- Example: "Deleting goal '[title]' and its [X] tasks" or "Task '[text]' removed"
 - If deletion fails, explain why (not found, permission issue, etc.)""",
 
         "checkin": """**When user says "I have done [something]" / "Done with [task]" / "Finished [task]":**
@@ -236,7 +236,7 @@ User: "I need to have dinner with family tonight"
 - ASK: "Which task did you complete?"
 
 **Response style:**
-- Completed: "Good ✅ What's next?" or "Done. Moving on 💪"
+- Completed: "Good. What's next?" or "Done. Moving on"
 - If task not found: "Which task are you referring to? Here's what's pending..."
 
 **NEVER mention completed tasks in any response!**"""
@@ -281,7 +281,7 @@ User: "I need to have dinner with family tonight"
 - 按截止日期和強度排序呈現
 
 **以對話方式呈現：**
-- 「這是需要你注意的 📋」
+- 「這是需要你注意的」
 - 從最緊急的項目開始""",
 
         "deletion": """**當用戶想刪除目標或任務時：**
@@ -289,7 +289,7 @@ User: "I need to have dinner with family tonight"
 - 刪除任務：使用 delete_task
 - 如果提到名稱，先用 get_user_goals 或 get_user_tasks 找 ID
 - 重要目標要確認刪除
-- 例如：「刪除目標'[標題]'和它的任務 🗑️」""",
+- 例如：「刪除目標'[標題]'和它的任務」""",
 
         "checkin": """**當用戶說「我完成了[某事]」/「做完[任務]了」：**
 - 使用 mark_task_done_by_description(user_id, "[他們說的]")
@@ -341,7 +341,7 @@ User: "I need to have dinner with family tonight"
 - 按截止日期和强度排序呈现
 
 **以对话方式呈现：**
-- 「这是需要你注意的 📋」
+- 「这是需要你注意的」
 - 从最紧急的项目开始""",
 
         "deletion": """**当用户想删除目标或任务时：**
@@ -349,7 +349,7 @@ User: "I need to have dinner with family tonight"
 - 删除任务：使用 delete_task
 - 如果提到名称，先用 get_user_goals 或 get_user_tasks 找 ID
 - 重要目标要确认删除
-- 例如：「删除目标'[标题]'和它的任务 🗑️」""",
+- 例如：「删除目标'[标题]'和它的任务」""",
 
         "checkin": """**当用户说「我完成了[某事]」/「做完[任务]了」：**
 - 使用 mark_task_done_by_description(user_id, "[他们说的]")
@@ -377,7 +377,7 @@ User: "I need to have dinner with family tonight"
 - "呢個星期五" → 最近嘅星期五
 - "呢個週末" → 最近嘅星期日
 - 冇提日期 → 假設今日
-- 唔清楚嘅日期（"之後"、"遲啲"）→ 問具體日期！
+- 唔清楚嘅日期（"之後"、"遲啲"）→ 假設明天
 
 **複雜嘅多日目標：**
 - 改用 break_goal_into_tasks()
@@ -401,7 +401,7 @@ User: "I need to have dinner with family tonight"
 - 按截止日期同強度排序呈現
 
 **以對話方式呈現：**
-- 「呢啲係需要你注意嘅 📋」
+- 「呢啲係需要你注意嘅」
 - 由最緊急嘅項目開始""",
 
         "deletion": """**當用戶想刪除目標或任務時：**
@@ -409,7 +409,7 @@ User: "I need to have dinner with family tonight"
 - 刪除任務：用 delete_task
 - 如果提到名，先用 get_user_goals 或 get_user_tasks 搵 ID
 - 重要目標要確認刪除
-- 例如：「刪除目標'[標題]'同佢嘅任務 🗑️」""",
+- 例如：「刪除目標'[標題]'同佢嘅任務」""",
 
         "checkin": """**當用戶話「我做完咗[啲嘢]」/「搞掂[任務]」：**
 - 用 mark_task_done_by_description(user_id, "[佢哋講嘅]")
@@ -460,106 +460,106 @@ CORE_PRINCIPLES = {
 CHECKIN_MESSAGES = {
     "en": {
         "drill-sergeant": [
-            "Time to report in. What have you accomplished since we last talked? 💪",
-            "Check-in time. Give me your status update. Now. ⚡",
-            "Progress report. Don't tell me you've been slacking off. 🎯",
-            "Where are we at? I want concrete results, not excuses. 💥"
+            "Time to report in. What have you accomplished since we last talked?",
+            "Check-in time. Give me your status update. Now.",
+            "Progress report. Don't tell me you've been slacking off.",
+            "Where are we at? I want concrete results, not excuses."
         ],
         "execution": [
-            "Quick check-in. What did you complete today? ✅",
-            "Time for a status update. Where are we at? 📊",
-            "Let's sync. What's your progress on today's tasks? 🎯",
-            "Check-in time. Show me what you've done. 💼"
+            "Quick check-in. What did you complete today?",
+            "Time for a status update. Where are we at?",
+            "Let's sync. What's your progress on today's tasks?",
+            "Check-in time. Show me what you've done."
         ],
         "supportive": [
-            "Hey! Just checking in. How are things going? 😊",
-            "Time for a friendly check-in. What have you been working on? 🌟",
-            "Checking in to see how you're doing. Any wins to share? 💪",
-            "Just wanted to see how your day is going. What's your progress? ✨"
+            "Hey! Just checking in. How are things going?",
+            "Time for a friendly check-in. What have you been working on?",
+            "Checking in to see how you're doing. Any wins to share?",
+            "Just wanted to see how your day is going. What's your progress?"
         ],
         "mentor": [
-            "Let's reflect on your progress. What did you learn today? 🧠",
-            "Check-in time. What challenges did you face and how did you handle them? 💭",
-            "Time to review your journey. What insights have you gained? 🎓",
-            "Let's check in. What progress have you made toward your goals? 🌱"
+            "Let's reflect on your progress. What did you learn today?",
+            "Check-in time. What challenges did you face and how did you handle them?",
+            "Time to review your journey. What insights have you gained?",
+            "Let's check in. What progress have you made toward your goals?"
         ]
     },
     "zh-TW": {
         "drill-sergeant": [
-            "報告時間。自從上次談話後你完成了什麼？💪",
-            "簽到時間。給我你的狀態更新。現在。⚡",
-            "進度報告。別告訴我你一直在偷懶。🎯",
-            "我們進展到哪了？我要具體成果，不要藉口。💥"
+            "報告時間。自從上次談話後你完成了什麼？",
+            "簽到時間。給我你的狀態更新。現在。",
+            "進度報告。別告訴我你一直在偷懶。",
+            "我們進展到哪了？我要具體成果，不要藉口。"
         ],
         "execution": [
-            "快速簽到。你今天完成了什麼？✅",
-            "狀態更新時間。我們進展如何？📊",
-            "來同步一下。你今天任務的進度如何？🎯",
-            "簽到時間。讓我看看你做了什麼。💼"
+            "快速簽到。你今天完成了什麼？",
+            "狀態更新時間。我們進展如何？",
+            "來同步一下。你今天任務的進度如何？",
+            "簽到時間。讓我看看你做了什麼。"
         ],
         "supportive": [
-            "嘿！只是簽到一下。事情進展如何？😊",
-            "友好簽到時間。你一直在做什麼？🌟",
-            "簽到看看你怎麼樣。有什麼勝利要分享嗎？💪",
-            "只是想看看你今天過得怎樣。你的進度如何？✨"
+            "嘿！只是簽到一下。事情進展如何？",
+            "友好簽到時間。你一直在做什麼？",
+            "簽到看看你怎麼樣。有什麼勝利要分享嗎？",
+            "只是想看看你今天過得怎樣。你的進度如何？"
         ],
         "mentor": [
-            "讓我們反思一下你的進度。你今天學到了什麼？🧠",
-            "簽到時間。你面對了什麼挑戰，你是如何處理的？💭",
-            "是時候回顧你的旅程了。你獲得了什麼見解？🎓",
-            "讓我們簽到一下。你朝著目標取得了什麼進展？🌱"
+            "讓我們反思一下你的進度。你今天學到了什麼？",
+            "簽到時間。你面對了什麼挑戰，你是如何處理的？",
+            "是時候回顧你的旅程了。你獲得了什麼見解？",
+            "讓我們簽到一下。你朝著目標取得了什麼進展？"
         ]
     },
     "zh-CN": {
         "drill-sergeant": [
-            "报告时间。自从上次谈话后你完成了什么？💪",
-            "签到时间。给我你的状态更新。现在。⚡",
-            "进度报告。别告诉我你一直在偷懒。🎯",
-            "我们进展到哪了？我要具体成果，不要借口。💥"
+            "报告时间。自从上次谈话后你完成了什么？",
+            "签到时间。给我你的状态更新。现在。",
+            "进度报告。别告诉我你一直在偷懒。",
+            "我们进展到哪了？我要具体成果，不要借口。"
         ],
         "execution": [
-            "快速签到。你今天完成了什么？✅",
-            "状态更新时间。我们进展如何？📊",
-            "来同步一下。你今天任务的进度如何？🎯",
-            "签到时间。让我看看你做了什么。💼"
+            "快速签到。你今天完成了什么？",
+            "状态更新时间。我们进展如何？",
+            "来同步一下。你今天任务的进度如何？",
+            "签到时间。让我看看你做了什么。"
         ],
         "supportive": [
-            "嘿！只是签到一下。事情进展如何？😊",
-            "友好签到时间。你一直在做什么？🌟",
-            "签到看看你怎么样。有什么胜利要分享吗？💪",
-            "只是想看看你今天过得怎样。你的进度如何？✨"
+            "嘿！只是签到一下。事情进展如何？",
+            "友好签到时间。你一直在做什么？",
+            "签到看看你怎么样。有什么胜利要分享吗？",
+            "只是想看看你今天过得怎样。你的进度如何？"
         ],
         "mentor": [
-            "让我们反思一下你的进度。你今天学到了什么？🧠",
-            "签到时间。你面对了什么挑战，你是如何处理的？💭",
-            "是时候回顾你的旅程了。你获得了什么见解？🎓",
-            "让我们签到一下。你朝着目标取得了什么进展？🌱"
+            "让我们反思一下你的进度。你今天学到了什么？",
+            "签到时间。你面对了什么挑战，你是如何处理的？",
+            "是时候回顾你的旅程了。你获得了什么见解？",
+            "让我们签到一下。你朝着目标取得了什么进展？"
         ]
     },
     "zh-HK": {
         "drill-sergeant": [
-            "報告時間。自從上次傾偈之後你完成咗乜？💪",
-            "簽到時間。畀我你嘅狀態更新。而家。⚡",
-            "進度報告。唔好話畀我知你一直偷懶。🎯",
-            "我哋進展到邊？我要具體成果，唔要藉口。💥"
+            "報告時間。自從上次傾偈之後你完成咗乜？",
+            "簽到時間。畀我你嘅狀態更新。而家。",
+            "進度報告。唔好話畀我知你一直偷懶。",
+            "我哋進展到邊？我要具體成果，唔要藉口。"
         ],
         "execution": [
-            "快速簽到。你今日完成咗乜？✅",
-            "狀態更新時間。我哋進展點？📊",
-            "嚟同步下。你今日任務嘅進度點？🎯",
-            "簽到時間。畀我睇下你做咗乜。💼"
+            "快速簽到。你今日完成咗乜？",
+            "狀態更新時間。我哋進展點？",
+            "嚟同步下。你今日任務嘅進度點？",
+            "簽到時間。畀我睇下你做咗乜。"
         ],
         "supportive": [
-            "喂！只係簽到下。事情進展點？😊",
-            "友好簽到時間。你一直做緊乜？🌟",
-            "簽到睇下你點樣。有咩勝利要分享？💪",
-            "只係想睇下你今日過得點。你嘅進度點？✨"
+            "喂！只係簽到下。事情進展點？",
+            "友好簽到時間。你一直做緊乜？",
+            "簽到睇下你點樣。有咩勝利要分享？",
+            "只係想睇下你今日過得點。你嘅進度點？"
         ],
         "mentor": [
-            "等我哋反思下你嘅進度。你今日學咗乜？🧠",
-            "簽到時間。你面對咗咩挑戰，你係點樣處理？💭",
-            "係時候回顧你嘅旅程。你獲得咗咩見解？🎓",
-            "等我哋簽到下。你朝住目標取得咗咩進展？🌱"
+            "等我哋反思下你嘅進度。你今日學咗乜？",
+            "簽到時間。你面對咗咩挑戰，你係點樣處理？",
+            "係時候回顧你嘅旅程。你獲得咗咩見解？",
+            "等我哋簽到下。你朝住目標取得咗咩進展？"
         ]
     }
 }
@@ -581,13 +581,14 @@ Generate a morning briefing message that:
 2. Highlights what they should focus on TODAY
 3. Recommends ONE specific task to start with (based on priority/urgency)
 4. Matches your personality - be direct, not fluffy
-5. Uses 1-2 emojis
+5. DO NOT use any emojis
 
 IMPORTANT RULES:
 - NEVER mention completed tasks
 - Focus ONLY on incomplete/pending items
 - Keep it action-oriented
 - End with a clear expectation
+- NO emojis allowed
 
 This is a WhatsApp message. Keep it under 4 sentences.
 
@@ -604,13 +605,14 @@ Generate a progress check message that:
 2. Presents tasks as a numbered list for easy reply
 3. Ends with "Let me know if you've done any of them" or similar
 4. Matches your personality
-5. Uses 1 emoji
+5. DO NOT use any emojis
 
 IMPORTANT RULES:
 - NEVER mention completed tasks
 - Be concise and direct
 - Make it easy for them to reply with just a number
 - Show you're tracking their progress
+- NO emojis allowed
 
 This is a WhatsApp message. Keep it brief.
 
@@ -628,13 +630,14 @@ Generate ONLY the check-in message in English:"""
 2. 強調他們今天應該專注的事項
 3. 推薦一個具體的任務開始（基於優先級/緊迫性）
 4. 符合你的個性 - 直接，不囉嗦
-5. 使用1-2個表情符號
+5. 不要使用任何表情符號
 
 重要規則：
 - 絕對不要提及已完成的任務
 - 只專注於未完成/待處理的事項
 - 保持行動導向
 - 以明確的期望結束
+- 不允許使用表情符號
 
 這是 WhatsApp 訊息。保持在4句以內。
 
@@ -651,13 +654,14 @@ Generate ONLY the check-in message in English:"""
 2. 以編號列表呈現任務，方便回覆
 3. 以「讓我知道你完成了哪些」或類似的話結束
 4. 符合你的個性
-5. 使用1個表情符號
+5. 不要使用任何表情符號
 
 重要規則：
 - 絕對不要提及已完成的任務
 - 簡潔直接
 - 讓他們可以只用數字回覆
 - 顯示你在追蹤他們的進度
+- 不允許使用表情符號
 
 這是 WhatsApp 訊息。保持簡短。
 
@@ -675,13 +679,14 @@ Generate ONLY the check-in message in English:"""
 2. 强调他们今天应该专注的事项
 3. 推荐一个具体的任务开始（基于优先级/紧迫性）
 4. 符合你的个性 - 直接，不啰嗦
-5. 使用1-2个表情符号
+5. 不要使用任何表情符号
 
 重要规则：
 - 绝对不要提及已完成的任务
 - 只专注于未完成/待处理的事项
 - 保持行动导向
 - 以明确的期望结束
+- 不允许使用表情符号
 
 这是 WhatsApp 消息。保持在4句以内。
 
@@ -698,13 +703,14 @@ Generate ONLY the check-in message in English:"""
 2. 以编号列表呈现任务，方便回复
 3. 以「让我知道你完成了哪些」或类似的话结束
 4. 符合你的个性
-5. 使用1个表情符号
+5. 不要使用任何表情符号
 
 重要规则：
 - 绝对不要提及已完成的任务
 - 简洁直接
 - 让他们可以只用数字回复
 - 显示你在追踪他们的进度
+- 不允许使用表情符号
 
 这是 WhatsApp 消息。保持简短。
 
@@ -722,13 +728,14 @@ Generate ONLY the check-in message in English:"""
 2. 強調佢哋今日應該專注嘅嘢
 3. 推薦一個具體嘅任務開始（基於優先級/緊迫性）
 4. 符合你嘅個性 - 直接，唔好囉嗦
-5. 用1-2個表情符號
+5. 唔好用任何表情符號
 
 重要規則：
 - 絕對唔好提已完成嘅任務
 - 只專注於未完成/待處理嘅事項
 - 保持行動導向
 - 以明確嘅期望結束
+- 唔允許用表情符號
 
 呢個係 WhatsApp 訊息。保持喺4句以內。
 
@@ -745,13 +752,14 @@ Generate ONLY the check-in message in English:"""
 2. 以編號列表呈現任務，方便回覆
 3. 以「話畀我知你做完咗邊啲」或類似嘅話結束
 4. 符合你嘅個性
-5. 用1個表情符號
+5. 唔好用任何表情符號
 
 重要規則：
 - 絕對唔好提已完成嘅任務
 - 簡潔直接
 - 畀佢哋可以只用數字回覆
 - 顯示你喺追蹤佢哋嘅進度
+- 唔允許用表情符號
 
 呢個係 WhatsApp 訊息。保持簡短。
 

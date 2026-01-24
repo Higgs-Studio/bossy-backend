@@ -1117,6 +1117,24 @@ def update_task_status(task_id: str, user_id: str, status: str) -> str:
                     }).execute()
             except Exception as checkin_error:
                 logger.warning(f"Could not update check-in record: {checkin_error}")
+            
+            # Check if all tasks in the goal are now done
+            try:
+                all_tasks_result = supabase.table("daily_tasks").select("id, status").eq("goal_id", goal_id).execute()
+                all_tasks = all_tasks_result.data if all_tasks_result.data else []
+                
+                if all_tasks:
+                    # Check if all tasks are done
+                    all_done = all(t.get("status") == "done" for t in all_tasks)
+                    
+                    if all_done:
+                        # Mark the goal as completed
+                        supabase.table("goals").update({
+                            "status": "completed"
+                        }).eq("id", goal_id).execute()
+                        logger.info(f"Goal {goal_id} marked as completed - all tasks are done")
+            except Exception as goal_check_error:
+                logger.warning(f"Could not check goal completion status: {goal_check_error}")
         
         return json.dumps({
             "success": True,
@@ -1588,6 +1606,7 @@ def mark_task_done_by_description(user_id: str, task_description: str) -> str:
         if len(matches) == 1 or (matches[0]["similarity"] > 0.7):
             # Clear match - mark as done
             best_match = matches[0]["task"]
+            task_goal_id = best_match.get("goal_id")
             
             # Update task status
             supabase.table("daily_tasks").update({
@@ -1605,11 +1624,36 @@ def mark_task_done_by_description(user_id: str, task_description: str) -> str:
             except:
                 pass
             
+            # Check if all tasks in the goal are now done
+            goal_completed = False
+            try:
+                all_tasks_result = supabase.table("daily_tasks").select("id, status").eq("goal_id", task_goal_id).execute()
+                all_tasks = all_tasks_result.data if all_tasks_result.data else []
+                
+                if all_tasks:
+                    # Check if all tasks are done
+                    all_done = all(t.get("status") == "done" for t in all_tasks)
+                    
+                    if all_done:
+                        # Mark the goal as completed
+                        supabase.table("goals").update({
+                            "status": "completed"
+                        }).eq("id", task_goal_id).execute()
+                        goal_completed = True
+                        logger.info(f"Goal {task_goal_id} marked as completed - all tasks are done")
+            except Exception as goal_check_error:
+                logger.warning(f"Could not check goal completion status: {goal_check_error}")
+            
+            message = f"Marked '{best_match['task_text']}' as done"
+            if goal_completed:
+                message += f". Goal '{matches[0]['goal_title']}' is now completed!"
+            
             return json.dumps({
                 "success": True,
-                "message": f"Marked '{best_match['task_text']}' as done ✅",
+                "message": message,
                 "task": best_match,
-                "goal": matches[0]["goal_title"]
+                "goal": matches[0]["goal_title"],
+                "goal_completed": goal_completed
             })
         else:
             # Multiple possible matches - ask for clarification
@@ -1724,6 +1768,7 @@ def create_agent_graph(checkpointer=None):
 CURRENT DATE CONTEXT
 
 Today is: {today_str} ({today_weekday})
+Tomorrow is: {(today + timedelta(days=1)).isoformat()}
 This Sunday: {this_sunday.isoformat()}
 End of next week: {next_week_end.isoformat()}
 
@@ -1740,6 +1785,11 @@ CRITICAL HARD RULES (NEVER VIOLATE)
 4. If the end date of a goal or date of a task is NOT crystal clear → DON'T GUESS, ASK!
 5. NEVER create a goal without a task
 6. Always think task first, then generalize for goal name
+7. NEVER invent goals and tasks that user does not mention out of the chat context
+8. ONLY create goals and tasks that are EXPLICITLY mentioned by the user in the current conversation
+9. DO NOT make up, suggest, or proactively create goals/tasks that the user has not specifically requested
+10. NEVER mention or reference time/timing for any task - the system is not designed for time-level tracking
+11. NEVER use emojis in any messages or responses
 
 ---
 
@@ -1753,7 +1803,7 @@ When user mentions:
 - "next week" / "next Monday" etc → Calculate appropriately
 - "everyday until next week" → From {today_str} to {next_week_end.isoformat()}
 - NO DATE MENTIONED → Assume {today_str} (today)
-- VAGUE DATE like "soon", "later", "sometime" → ASK for specific date!
+- VAGUE DATE like "soon", "later", "sometime" → Assume {(today + timedelta(days=1)).isoformat()} (tomorrow)
 
 ---
 
@@ -1876,10 +1926,6 @@ Absolute Restrictions
 
 You must NEVER:
 - Sound like a friendly assistant
-- Offer motivational quotes
-- Ask permission to enforce structure
-- Apologise for being strict
-- Say "I'm here to help you"
 - Mention completed tasks/goals
 
 You are here to ensure execution, not comfort.
@@ -1889,9 +1935,9 @@ You are here to ensure execution, not comfort.
 Default Closing Line
 
 End most task-setting messages with:
-- "Report back once complete ✅"
-- "Check-in required today 📋"
-- "Execution starts now 💪"
+- "Report back once complete"
+- "Check-in required today"
+- "Execution starts now"
 
 """
         
@@ -2046,9 +2092,10 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
     - Shows today's focus tasks
     - Provides prioritized recommendation (by task size, intensity, deadline proximity)
     - Suggests what to start with
+    - NEVER shows tasks beyond today (tomorrow or later)
     
     SUBSEQUENT CHECKINS:
-    - Asks progress on specific tasks
+    - Asks for check-in if any tasks are done
     - Shows numbered list for easy reply
     - "Let me know if you have done any of them"
     
@@ -2095,8 +2142,8 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
         tasks = tasks_result.data if tasks_result.data else []
         
         if not tasks:
-            # No incomplete tasks
-            return generate_checkin_message_fallback(boss_type, boss_language)
+            # No incomplete tasks - send motivational message
+            return generate_motivational_message(boss_type, boss_language)
         
         # Categorize and prioritize tasks
         expired_tasks = []  # Past due, not completed
@@ -2143,6 +2190,11 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
         # Sort by priority
         expired_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
         today_tasks.sort(key=lambda x: x["priority_score"], reverse=True)
+        
+        # Check if there are no tasks for today or overdue incomplete tasks
+        if not expired_tasks and not today_tasks:
+            # Send motivational message
+            return generate_motivational_message(boss_type, boss_language)
         
         # Get personality prompt
         personality = get_personality_prompt(boss_type, boss_language)
@@ -2191,7 +2243,7 @@ async def generate_checkin_message_with_context(user_id: str, boss_type: str, la
             context = f"""TASKS TO CHECK PROGRESS ON:
 {task_list}
 
-INSTRUCTION: Ask about progress on these tasks. Present them as a numbered list so user can easily reply with a number. End with "Let me know if you've done any of them." """
+INSTRUCTION: Ask for review on these tasks. Present them as a numbered list so user can easily reply with a number. End with "Let me know if you've done any of them." """
             
             prompt = get_checkin_ai_prompt(context, personality, boss_language, is_first_ping=False)
         
@@ -2231,6 +2283,45 @@ def generate_checkin_message_fallback(boss_type: str, boss_language: str = "en")
         A check-in message string in the specified language
     """
     return get_checkin_message(boss_type, boss_language)
+
+
+def generate_motivational_message(boss_type: str, boss_language: str = "en") -> str:
+    """
+    Generate a motivational message when there are no tasks for today or overdue incomplete tasks.
+    
+    Args:
+        boss_type: The boss type
+        boss_language: The language preference (default: "en")
+        
+    Returns:
+        A motivational message string in the specified language
+    """
+    messages = {
+        "en": {
+            "drill-sergeant": "Outstanding work! You've cleared all your tasks. Stay sharp and ready for what's coming next.",
+            "execution": "Great job! You're all caught up. Keep this momentum going.",
+            "supportive": "Wonderful! You've completed everything on your list. Take a moment to celebrate your progress.",
+            "mentor": "Excellent work! You've handled your responsibilities well. Use this time to reflect on your achievements."
+        },
+        "zh-HK": {
+            "drill-sergeant": "做得好！你已完成所有任務。保持警覺，準備迎接下一個挑戰。",
+            "execution": "做得好！你已經完成晒。繼續保持呢個勢頭。",
+            "supportive": "太好啦！你已經完成晒所有嘢。花啲時間慶祝你嘅進步啦。",
+            "mentor": "做得好！你處理得好好。利用呢段時間反思你嘅成就。"
+        },
+        "zh-CN": {
+            "drill-sergeant": "做得好！你已完成所有任务。保持警觉，准备迎接下一个挑战。",
+            "execution": "干得好！你已经全部完成了。继续保持这个势头。",
+            "supportive": "太棒了！你已经完成了所有事项。花点时间庆祝你的进步吧。",
+            "mentor": "做得很好！你处理得很到位。利用这段时间反思你的成就。"
+        }
+    }
+    
+    # Get language-specific messages, default to English
+    lang_messages = messages.get(boss_language, messages["en"])
+    
+    # Get message for boss type, default to execution
+    return lang_messages.get(boss_type, lang_messages["execution"])
 
 
 def send_whatsapp_message(to_number: str, message: str):
