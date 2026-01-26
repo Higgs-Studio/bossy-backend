@@ -1448,26 +1448,123 @@ def create_goal_with_task(user_id: str, task_text: str, task_date: str, goal_nam
         })
 
 
+def ordinal(n):
+    """Convert number to ordinal string (1st, 2nd, 3rd, etc.)"""
+    if 10 <= n % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f"{n}{suffix}"
+
+
 @tool
-def create_recurring_tasks(user_id: str, task_text: str, start_date: str, end_date: str, goal_name: str = None, intensity: str = "medium") -> str:
+def create_recurring_tasks(
+    user_id: str, 
+    task_text: str, 
+    start_date: str, 
+    end_date: str, 
+    goal_name: str = None, 
+    intensity: str = "medium",
+    recurrence_type: str = "daily",
+    recurrence_interval: int = 1,
+    weekdays: list = None,
+    day_of_month: int = None
+) -> str:
     """
-    Create a goal with recurring daily tasks from start_date to end_date.
-    Use this when user says "I need to do xxx everyday until [date]".
+    Create a goal with recurring tasks from start_date to end_date with flexible recurrence patterns.
     
     Args:
         user_id: The user ID (UUID)
-        task_text: The task description to repeat daily
+        task_text: The task description to repeat
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format (inclusive)
         goal_name: Optional goal name (will be generalized from task if not provided)
         intensity: Goal intensity - "low", "medium", or "high"
+        recurrence_type: Type of recurrence
+            - "daily": Every day (default)
+            - "interval": Every N days (use recurrence_interval to specify N)
+            - "weekly": Specific days of the week (use weekdays parameter)
+            - "biweekly": Every 2 weeks (14 days)
+            - "monthly": Specific day of each month (use day_of_month parameter)
+            - "yearly": Same date every year
+        recurrence_interval: For "interval" type, repeat every N days (default 1)
+        weekdays: For "weekly" type, list of weekday numbers (0=Monday, 1=Tuesday, ..., 6=Sunday)
+                  Examples: [5] for every Saturday, [0,2] for every Monday and Wednesday
+        day_of_month: For "monthly" type, day of month (1-31). If not provided, uses start_date day.
+                      If day doesn't exist in a month (e.g., 31st in February), that month is skipped.
+    
+    Examples:
+        - Every day: recurrence_type="daily"
+        - Every 3 days: recurrence_type="interval", recurrence_interval=3
+        - Every Saturday: recurrence_type="weekly", weekdays=[5]
+        - Every Monday and Friday: recurrence_type="weekly", weekdays=[0,4]
+        - Biweekly: recurrence_type="biweekly"
+        - Monthly on 15th: recurrence_type="monthly", day_of_month=15
+        - Yearly: recurrence_type="yearly"
         
     Returns:
         A JSON string with created goal and all tasks
     """
     try:
+        # Validate recurrence parameters
+        valid_types = ["daily", "interval", "weekly", "biweekly", "monthly", "yearly"]
+        if recurrence_type not in valid_types:
+            return json.dumps({
+                "success": False,
+                "error": f"Invalid recurrence_type: {recurrence_type}. Must be one of: {', '.join(valid_types)}"
+            })
+        
+        if recurrence_type == "weekly" and not weekdays:
+            return json.dumps({
+                "success": False,
+                "error": "weekdays parameter is required when recurrence_type is 'weekly'"
+            })
+        
+        if recurrence_type == "weekly" and weekdays:
+            if not all(isinstance(d, int) and 0 <= d <= 6 for d in weekdays):
+                return json.dumps({
+                    "success": False,
+                    "error": "weekdays must be a list of integers between 0 (Monday) and 6 (Sunday)"
+                })
+        
+        if recurrence_interval < 1:
+            return json.dumps({
+                "success": False,
+                "error": "recurrence_interval must be at least 1"
+            })
+        
+        # For monthly recurrence, validate day_of_month
+        if recurrence_type == "monthly":
+            if day_of_month is None:
+                # Use start date's day if not specified
+                day_of_month = date.fromisoformat(start_date).day
+            elif not isinstance(day_of_month, int) or not (1 <= day_of_month <= 31):
+                return json.dumps({
+                    "success": False,
+                    "error": "day_of_month must be an integer between 1 and 31"
+                })
+        
+        # Generate appropriate goal name if not provided
         if not goal_name:
-            goal_name = f"Daily: {task_text}"
+            if recurrence_type == "daily":
+                goal_name = f"Daily: {task_text}"
+            elif recurrence_type == "interval":
+                goal_name = f"Every {recurrence_interval} days: {task_text}"
+            elif recurrence_type == "biweekly":
+                goal_name = f"Biweekly: {task_text}"
+            elif recurrence_type == "monthly":
+                if day_of_month is None:
+                    day_of_month = date.fromisoformat(start_date).day
+                goal_name = f"Monthly ({ordinal(day_of_month)}): {task_text}"
+            elif recurrence_type == "yearly":
+                goal_name = f"Yearly: {task_text}"
+            else:  # weekly
+                weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                day_names = [weekday_names[d] for d in sorted(weekdays)]
+                if len(day_names) == 1:
+                    goal_name = f"Every {day_names[0]}: {task_text}"
+                else:
+                    goal_name = f"Every {', '.join(day_names)}: {task_text}"
         
         # Get boss_type from user preferences
         boss_type = "execution"
@@ -1498,35 +1595,183 @@ def create_recurring_tasks(user_id: str, task_text: str, start_date: str, end_da
         
         goal_id = goal_result.data[0]["id"]
         
-        # Create tasks for each day
+        # Create tasks based on recurrence pattern
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
         
         created_tasks = []
         current_date = start
         
-        while current_date <= end:
-            task_data = {
-                "goal_id": goal_id,
-                "task_date": current_date.isoformat(),
-                "task_text": task_text,
-                "status": "todo"
-            }
-            
-            task_result = supabase.table("daily_tasks").insert(task_data).execute()
-            if task_result.data:
-                created_tasks.append(task_result.data[0])
-            
-            current_date += timedelta(days=1)
+        if recurrence_type == "daily":
+            # Every day (original behavior)
+            while current_date <= end:
+                task_data = {
+                    "goal_id": goal_id,
+                    "task_date": current_date.isoformat(),
+                    "task_text": task_text,
+                    "status": "todo"
+                }
+                
+                task_result = supabase.table("daily_tasks").insert(task_data).execute()
+                if task_result.data:
+                    created_tasks.append(task_result.data[0])
+                
+                current_date += timedelta(days=1)
         
-        days_count = (end - start).days + 1
+        elif recurrence_type == "interval":
+            # Every N days
+            while current_date <= end:
+                task_data = {
+                    "goal_id": goal_id,
+                    "task_date": current_date.isoformat(),
+                    "task_text": task_text,
+                    "status": "todo"
+                }
+                
+                task_result = supabase.table("daily_tasks").insert(task_data).execute()
+                if task_result.data:
+                    created_tasks.append(task_result.data[0])
+                
+                current_date += timedelta(days=recurrence_interval)
+        
+        elif recurrence_type == "biweekly":
+            # Every 2 weeks (14 days)
+            while current_date <= end:
+                task_data = {
+                    "goal_id": goal_id,
+                    "task_date": current_date.isoformat(),
+                    "task_text": task_text,
+                    "status": "todo"
+                }
+                
+                task_result = supabase.table("daily_tasks").insert(task_data).execute()
+                if task_result.data:
+                    created_tasks.append(task_result.data[0])
+                
+                current_date += timedelta(days=14)
+        
+        elif recurrence_type == "weekly":
+            # Specific days of the week
+            while current_date <= end:
+                # Check if current day is one of the specified weekdays
+                # weekday() returns 0=Monday, 1=Tuesday, ..., 6=Sunday
+                if current_date.weekday() in weekdays:
+                    task_data = {
+                        "goal_id": goal_id,
+                        "task_date": current_date.isoformat(),
+                        "task_text": task_text,
+                        "status": "todo"
+                    }
+                    
+                    task_result = supabase.table("daily_tasks").insert(task_data).execute()
+                    if task_result.data:
+                        created_tasks.append(task_result.data[0])
+                
+                current_date += timedelta(days=1)
+        
+        elif recurrence_type == "monthly":
+            # Specific day of each month
+            if day_of_month is None:
+                day_of_month = start.day
+            
+            # Start from the first occurrence of the day_of_month
+            if start.day <= day_of_month:
+                # First occurrence is in the start month
+                try:
+                    current_date = start.replace(day=day_of_month)
+                except ValueError:
+                    # Day doesn't exist in this month (e.g., Feb 30), skip to next month
+                    if start.month == 12:
+                        current_date = date(start.year + 1, 1, 1)
+                    else:
+                        current_date = date(start.year, start.month + 1, 1)
+            else:
+                # First occurrence is in the next month
+                if start.month == 12:
+                    current_date = date(start.year + 1, 1, 1)
+                else:
+                    current_date = date(start.year, start.month + 1, 1)
+            
+            while current_date <= end:
+                try:
+                    # Try to create task on the specified day of month
+                    task_date = current_date.replace(day=day_of_month)
+                    if task_date <= end:
+                        task_data = {
+                            "goal_id": goal_id,
+                            "task_date": task_date.isoformat(),
+                            "task_text": task_text,
+                            "status": "todo"
+                        }
+                        
+                        task_result = supabase.table("daily_tasks").insert(task_data).execute()
+                        if task_result.data:
+                            created_tasks.append(task_result.data[0])
+                except ValueError:
+                    # Day doesn't exist in this month (e.g., Feb 30), skip this month
+                    pass
+                
+                # Move to next month
+                if current_date.month == 12:
+                    current_date = date(current_date.year + 1, 1, 1)
+                else:
+                    current_date = date(current_date.year, current_date.month + 1, 1)
+        
+        elif recurrence_type == "yearly":
+            # Same date every year
+            year = start.year
+            month = start.month
+            day = start.day
+            
+            while True:
+                try:
+                    current_date = date(year, month, day)
+                    if current_date > end:
+                        break
+                    if current_date >= start:
+                        task_data = {
+                            "goal_id": goal_id,
+                            "task_date": current_date.isoformat(),
+                            "task_text": task_text,
+                            "status": "todo"
+                        }
+                        
+                        task_result = supabase.table("daily_tasks").insert(task_data).execute()
+                        if task_result.data:
+                            created_tasks.append(task_result.data[0])
+                except ValueError:
+                    # Handle leap year edge case (Feb 29)
+                    pass
+                
+                year += 1
+        
+        # Generate descriptive message
+        if recurrence_type == "daily":
+            pattern_desc = "daily"
+        elif recurrence_type == "interval":
+            pattern_desc = f"every {recurrence_interval} days"
+        elif recurrence_type == "biweekly":
+            pattern_desc = "biweekly (every 14 days)"
+        elif recurrence_type == "monthly":
+            if day_of_month is None:
+                day_of_month = date.fromisoformat(start_date).day
+            pattern_desc = f"monthly on the {ordinal(day_of_month)}"
+        elif recurrence_type == "yearly":
+            start_dt = date.fromisoformat(start_date)
+            month_names = ["January", "February", "March", "April", "May", "June", 
+                          "July", "August", "September", "October", "November", "December"]
+            pattern_desc = f"yearly on {month_names[start_dt.month - 1]} {ordinal(start_dt.day)}"
+        else:  # weekly
+            weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            day_names = [weekday_names[d] for d in sorted(weekdays)]
+            pattern_desc = f"every {', '.join(day_names)}"
         
         return json.dumps({
             "success": True,
-            "message": f"Created goal '{goal_name}' with {len(created_tasks)} daily tasks from {start_date} to {end_date}",
+            "message": f"Created goal '{goal_name}' with {len(created_tasks)} tasks ({pattern_desc}) from {start_date} to {end_date}",
             "goal": goal_result.data[0],
             "tasks_created": len(created_tasks),
-            "days": days_count,
+            "recurrence_pattern": pattern_desc,
             "sample_tasks": created_tasks[:3]  # Show first 3 as sample
         })
         
@@ -1859,6 +2104,30 @@ USER SCENARIO HANDLING
 **"I need to do xxx everyday until next week"**
 → Use create_recurring_tasks(user_id, "xxx", "{today_str}", "{next_week_end.isoformat()}")
 → Creates the same task for each day
+
+**"I need to do xxx every 3 days until [date]"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "end_date", recurrence_type="interval", recurrence_interval=3)
+→ Creates task every 3 days
+
+**"I need to do xxx every Saturday until [date]"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "end_date", recurrence_type="weekly", weekdays=[5])
+→ Creates task only on Saturdays (5=Saturday, 0=Monday, 6=Sunday)
+
+**"I need to do xxx every Monday and Friday until [date]"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "end_date", recurrence_type="weekly", weekdays=[0,4])
+→ Creates task on Mondays (0) and Fridays (4)
+
+**"I need to do xxx biweekly until [date]"** or **"every 2 weeks"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "end_date", recurrence_type="biweekly")
+→ Creates task every 14 days starting from today
+
+**"I need to do xxx every month until [date]"** or **"monthly on the 15th"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "end_date", recurrence_type="monthly", day_of_month=15)
+→ Creates task on 15th of each month (omit day_of_month to use start_date's day)
+
+**"I need to do xxx every year until [date]"** or **"annually"**
+→ Use create_recurring_tasks(user_id, "xxx", "{today_str}", "end_date", recurrence_type="yearly")
+→ Creates task on same date each year
 
 ---
 
