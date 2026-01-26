@@ -254,6 +254,221 @@ The function returns a JSON response with:
 
 The enhancement is fully backward compatible. Existing code calling `create_recurring_tasks` without the new parameters will continue to work as before (creating daily tasks).
 
+---
+
+## New Feature: Reschedule Task Occurrence
+
+### Overview
+
+A new function `reschedule_task_occurrence` has been added to handle conflicts in recurring tasks. This allows users to move a specific occurrence of a recurring task to a different date without affecting other occurrences in the series.
+
+### Function Signature
+
+```python
+@tool
+def reschedule_task_occurrence(
+    user_id: str,
+    task_description: str,
+    original_date: str,
+    new_date: str
+) -> str:
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `user_id` | str | The user ID (UUID) |
+| `task_description` | str | Description or keywords to identify the task |
+| `original_date` | str | The original date of the task to reschedule (YYYY-MM-DD) |
+| `new_date` | str | The new date to move the task to (YYYY-MM-DD) |
+
+### Use Cases
+
+This function is perfect for handling:
+- **Conflicts**: When a recurring task conflicts with another commitment
+- **Scheduling changes**: When you need to move one instance without changing the pattern
+- **Exceptions**: When you want to keep the recurring series but adjust one occurrence
+
+### Features
+
+1. **Smart Matching**: Uses fuzzy text matching to find the right task
+2. **Conflict Detection**: Warns if the same task already exists on the new date
+3. **Clarification**: Asks for clarification when multiple matches are found
+4. **Preservation**: All other task occurrences remain unchanged
+5. **User-Friendly Messages**: Provides helpful feedback with weekday names
+
+### Usage Examples
+
+#### Example 1: Moving a Weekly Gym Session
+**User**: "Move my gym session from Monday to Tuesday this week"
+
+**Bot calls**:
+```python
+reschedule_task_occurrence(
+    user_id="user-uuid",
+    task_description="gym",
+    original_date="2026-01-27",  # Monday
+    new_date="2026-01-28"        # Tuesday
+)
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "message": "Rescheduled 'go to gym' from Monday, January 27 to Tuesday, January 28",
+  "task": { /* updated task object */ },
+  "goal": "Every Monday: go to gym",
+  "original_date": "2026-01-27",
+  "new_date": "2026-01-28",
+  "note": "Other occurrences of this recurring task remain unchanged."
+}
+```
+
+#### Example 2: Rescheduling a Monthly Meeting
+**User**: "Reschedule the team meeting on Feb 5 to Feb 6"
+
+**Bot calls**:
+```python
+reschedule_task_occurrence(
+    user_id="user-uuid",
+    task_description="team meeting",
+    original_date="2026-02-05",
+    new_date="2026-02-06"
+)
+```
+
+#### Example 3: Moving a Biweekly Task
+**User**: "I can't do laundry on the 26th, move it to the 27th"
+
+**Bot calls**:
+```python
+reschedule_task_occurrence(
+    user_id="user-uuid",
+    task_description="laundry",
+    original_date="2026-01-26",
+    new_date="2026-01-27"
+)
+```
+
+### Error Handling
+
+The function provides helpful error messages for common scenarios:
+
+#### No Task Found on Original Date
+```json
+{
+  "success": false,
+  "error": "No tasks found on 2026-01-27",
+  "suggestion": "Please check the date. You can say 'what are my tasks on 2026-01-27' to see what's scheduled."
+}
+```
+
+#### Task Already Exists on New Date
+```json
+{
+  "success": false,
+  "error": "A task with the same description already exists on 2026-01-28",
+  "suggestion": "Did you mean to mark the original task on 2026-01-27 as done instead?"
+}
+```
+
+#### Multiple Matches Found
+```json
+{
+  "success": false,
+  "requires_clarification": true,
+  "message": "I found multiple tasks on 2026-01-27. Which one do you want to reschedule?",
+  "options": [
+    {
+      "number": 1,
+      "task_id": "task-id-1",
+      "task_text": "gym session",
+      "goal": "Every Monday: gym"
+    },
+    {
+      "number": 2,
+      "task_id": "task-id-2",
+      "task_text": "gym class",
+      "goal": "Weekly fitness"
+    }
+  ]
+}
+```
+
+### Chatbot Integration
+
+The function is integrated into the system prompt with usage examples:
+
+**User Queries That Trigger This Function**:
+- "Move my gym session from Monday to Tuesday"
+- "Reschedule the meeting on Jan 15 to Jan 16"
+- "Change my appointment from Feb 3 to Feb 10"
+- "I can't do laundry on the 5th, move it to the 6th"
+
+### Important Notes
+
+1. **Single Instance Only**: This function only changes one occurrence, not the entire recurring series
+2. **Active Goals Only**: Only searches tasks in active goals
+3. **Date Format**: Always use YYYY-MM-DD format for dates
+4. **Fuzzy Matching**: Uses similarity matching to find tasks, so exact wording isn't required
+5. **Conflict Prevention**: Prevents creating duplicate tasks on the same date
+
+---
+
+## Complete Enhancement Summary
+
+### What's New?
+
+This enhancement provides a comprehensive recurring task management system with:
+
+#### 1. **Six Recurrence Patterns**
+| Pattern | Frequency | Use Case |
+|---------|-----------|----------|
+| Daily | Every day | Daily habits (meditation, journaling) |
+| Interval | Every N days | Regular intervals (vitamins every 3 days) |
+| **Biweekly** ✨ | Every 14 days | Bi-weekly activities (laundry, reviews) |
+| Weekly | Specific weekdays | Weekly schedules (gym Mon/Wed/Fri) |
+| **Monthly** ✨ | Specific day each month | Monthly obligations (rent, bills) |
+| **Yearly** ✨ | Same date annually | Annual events (insurance, renewals) |
+
+#### 2. **Flexible Rescheduling** ✨
+- Move individual task occurrences without affecting the series
+- Handle conflicts and scheduling changes gracefully
+- Smart conflict detection and prevention
+
+### Key Benefits
+
+✅ **Comprehensive Coverage**: Supports all common recurrence patterns  
+✅ **Flexible Management**: Reschedule individual occurrences as needed  
+✅ **Smart Matching**: Fuzzy text matching finds tasks without exact wording  
+✅ **User-Friendly**: Clear messages with weekday names and helpful suggestions  
+✅ **Backward Compatible**: Existing code continues to work unchanged  
+✅ **Robust Validation**: Comprehensive error handling and edge case management  
+✅ **Conflict Prevention**: Detects and prevents duplicate tasks  
+
+### Real-World Scenarios Supported
+
+1. **"I need to go to the gym every Monday until summer"** ✅
+2. **"Pay rent on the 1st of every month"** ✅
+3. **"Review project status biweekly"** ✅
+4. **"Renew insurance every year"** ✅
+5. **"Move Monday's gym session to Tuesday this week"** ✅
+6. **"Take vitamins every 3 days"** ✅
+7. **"Team meeting every Monday and Wednesday"** ✅
+
+### Implementation Highlights
+
+- **196 lines** of recurring task creation logic with all patterns
+- **142 lines** of reschedule logic with smart matching
+- Automatic goal naming based on recurrence pattern
+- Helper function for ordinal numbers (1st, 2nd, 3rd, etc.)
+- Comprehensive system prompt guidance for the AI
+- Full integration with existing task management system
+
+This enhancement transforms the chatbot from supporting only consecutive daily tasks to a full-featured recurring task management system that handles virtually any scheduling pattern users might need! 🎉
+
 ## Summary of Recurrence Types
 
 | Type | Description | Key Parameters | Example |

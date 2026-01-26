@@ -1929,6 +1929,164 @@ def mark_task_done_by_description(user_id: str, task_description: str) -> str:
         })
 
 
+@tool
+def reschedule_task_occurrence(
+    user_id: str,
+    task_description: str,
+    original_date: str,
+    new_date: str
+) -> str:
+    """
+    Reschedule a specific occurrence of a task in a recurring goal to a different date.
+    Use this when user wants to move a single task instance due to a conflict.
+    
+    Args:
+        user_id: The user ID (UUID)
+        task_description: Description or keywords to identify the task
+        original_date: The original date of the task to reschedule (YYYY-MM-DD format)
+        new_date: The new date to move the task to (YYYY-MM-DD format)
+        
+    Examples:
+        - "Move my Monday gym session to Tuesday this week"
+        - "Reschedule the team meeting on Jan 15 to Jan 16"
+        - "Change my dentist appointment from Feb 3 to Feb 10"
+        
+    Returns:
+        A JSON string with the result of the reschedule operation
+    """
+    try:
+        # Validate dates
+        try:
+            orig_date_obj = date.fromisoformat(original_date)
+            new_date_obj = date.fromisoformat(new_date)
+        except ValueError as e:
+            return json.dumps({
+                "success": False,
+                "error": f"Invalid date format: {str(e)}. Use YYYY-MM-DD format."
+            })
+        
+        # Get all active goals for the user
+        goals_result = supabase.table("goals").select("id, title").eq("user_id", user_id).eq("status", "active").execute()
+        goal_ids = [g["id"] for g in (goals_result.data if goals_result.data else [])]
+        goal_map = {g["id"]: g["title"] for g in (goals_result.data if goals_result.data else [])}
+        
+        if not goal_ids:
+            return json.dumps({
+                "success": False,
+                "error": "No active goals found"
+            })
+        
+        # Find the task on the original date matching the description
+        tasks_result = supabase.table("daily_tasks").select("id, task_text, task_date, status, goal_id").in_("goal_id", goal_ids).eq("task_date", original_date).execute()
+        tasks = tasks_result.data if tasks_result.data else []
+        
+        if not tasks:
+            return json.dumps({
+                "success": False,
+                "error": f"No tasks found on {original_date}",
+                "suggestion": f"Please check the date. You can say 'what are my tasks on {original_date}' to see what's scheduled."
+            })
+        
+        # Find matching tasks using similarity
+        search_lower = task_description.lower().strip()
+        matches = []
+        
+        for task in tasks:
+            task_text_lower = task.get("task_text", "").lower()
+            similarity = calculate_similarity(search_lower, task_text_lower)
+            
+            # Also check for keyword matches
+            keywords_match = any(word in task_text_lower for word in search_lower.split() if len(word) > 2)
+            
+            if similarity >= 0.4 or keywords_match:
+                matches.append({
+                    "task": task,
+                    "similarity": similarity,
+                    "goal_title": goal_map.get(task.get("goal_id"), "Unknown")
+                })
+        
+        # Sort by similarity
+        matches.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        if not matches:
+            return json.dumps({
+                "success": False,
+                "error": f"No matching tasks found for '{task_description}' on {original_date}",
+                "available_tasks": [{"task_text": t["task_text"], "goal": goal_map.get(t["goal_id"], "Unknown")} for t in tasks],
+                "suggestion": "Please specify which task you want to reschedule from the list above."
+            })
+        
+        # Check if there's already a task with the same description on the new date
+        new_date_tasks = supabase.table("daily_tasks").select("id, task_text, task_date").in_("goal_id", goal_ids).eq("task_date", new_date).execute()
+        new_date_tasks_list = new_date_tasks.data if new_date_tasks.data else []
+        
+        conflict_found = False
+        for ndt in new_date_tasks_list:
+            if ndt.get("task_text", "").lower() == matches[0]["task"]["task_text"].lower():
+                conflict_found = True
+                break
+        
+        if conflict_found:
+            return json.dumps({
+                "success": False,
+                "error": f"A task with the same description already exists on {new_date}",
+                "suggestion": f"Did you mean to mark the original task on {original_date} as done instead?"
+            })
+        
+        if len(matches) == 1 or matches[0]["similarity"] > 0.7:
+            # Clear match - reschedule it
+            best_match = matches[0]["task"]
+            
+            # Update task date
+            update_result = supabase.table("daily_tasks").update({
+                "task_date": new_date
+            }).eq("id", best_match["id"]).execute()
+            
+            if not update_result.data:
+                return json.dumps({
+                    "success": False,
+                    "error": "Failed to update task date"
+                })
+            
+            # Format dates nicely for response
+            orig_weekday = orig_date_obj.strftime("%A, %B %d")
+            new_weekday = new_date_obj.strftime("%A, %B %d")
+            
+            return json.dumps({
+                "success": True,
+                "message": f"Rescheduled '{best_match['task_text']}' from {orig_weekday} to {new_weekday}",
+                "task": update_result.data[0],
+                "goal": matches[0]["goal_title"],
+                "original_date": original_date,
+                "new_date": new_date,
+                "note": "Other occurrences of this recurring task remain unchanged."
+            })
+        else:
+            # Multiple possible matches - ask for clarification
+            options = []
+            for i, m in enumerate(matches[:5], 1):
+                options.append({
+                    "number": i,
+                    "task_id": m["task"]["id"],
+                    "task_text": m["task"]["task_text"],
+                    "goal": m["goal_title"]
+                })
+            
+            return json.dumps({
+                "success": False,
+                "requires_clarification": True,
+                "message": f"I found multiple tasks on {original_date}. Which one do you want to reschedule?",
+                "options": options
+            })
+        
+    except Exception as e:
+        logger.error(f"Error rescheduling task: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        })
+
+
 # ============================================================================
 # LangGraph State and Agent Setup
 # ============================================================================
@@ -1960,6 +2118,7 @@ def create_agent_graph(checkpointer=None):
         create_goal_with_task,             # Always create goal + task together
         create_recurring_tasks,            # For "do xxx everyday until [date]"
         mark_task_done_by_description,     # For "I have done xxx" / "Done with xxx"
+        reschedule_task_occurrence,        # For "move xxx from [date] to [date]"
         
         # Legacy tools (still useful for specific cases)
         break_goal_into_tasks,             # For complex multi-day goals
@@ -2156,6 +2315,13 @@ Goal Statuses: "active", "completed", "abandoned"
 When user says they completed something:
 1. Use mark_task_done_by_description() to find and mark the task done
 2. If multiple matches found, present numbered options and ask which one
+
+When user wants to reschedule a specific task occurrence:
+1. Use reschedule_task_occurrence(user_id, task_description, original_date, new_date)
+2. This changes only ONE instance of a recurring task, not the entire series
+3. Examples:
+   - "Move my gym session from Monday to Tuesday" → reschedule_task_occurrence(user_id, "gym", "2026-01-27", "2026-01-28")
+   - "Reschedule the team meeting on Feb 5 to Feb 6" → reschedule_task_occurrence(user_id, "team meeting", "2026-02-05", "2026-02-06")
 
 ---
 
