@@ -93,6 +93,45 @@ else:
 # LangGraph Tools for Task Management
 # ============================================================================
 
+def check_free_tier_goal_limit(user_id: str) -> dict:
+    """
+    Check if a free tier user has reached the maximum goal limit (5 active goals).
+    
+    Args:
+        user_id: The user ID (UUID) to check
+        
+    Returns:
+        A dict with 'allowed' (bool) and optionally 'error' (str) if not allowed
+    """
+    try:
+        # Get subscription_status from user_preferences
+        pref_result = supabase.table("user_preferences").select("subscription_status").eq("user_id", user_id).execute()
+        
+        subscription_status = "free"  # Default to free if not found
+        if pref_result.data and len(pref_result.data) > 0:
+            subscription_status = pref_result.data[0].get("subscription_status", "free")
+        
+        # Only check limit for free tier users
+        if subscription_status != "free":
+            return {"allowed": True}
+        
+        # Count active goals for the user
+        goals_result = supabase.table("goals").select("id").eq("user_id", user_id).eq("status", "active").execute()
+        active_goal_count = len(goals_result.data) if goals_result.data else 0
+        
+        if active_goal_count >= 5:
+            return {
+                "allowed": False,
+                "error": f"You have reached the maximum limit of 5 active goals on the free plan. Please complete or remove an existing goal before creating a new one, or upgrade to a premium plan for unlimited goals."
+            }
+        
+        return {"allowed": True}
+    except Exception as e:
+        logger.error(f"Error checking free tier goal limit: {e}")
+        # Allow goal creation if check fails to avoid blocking users
+        return {"allowed": True}
+
+
 def calculate_similarity(text1: str, text2: str) -> float:
     """
     Calculate similarity between two texts using SequenceMatcher.
@@ -206,6 +245,14 @@ def break_goal_into_tasks(goal: str, user_id: str, intensity: str = "medium", st
         A JSON string containing the goal and tasks created
     """
     try:
+        # Check free tier goal limit
+        limit_check = check_free_tier_goal_limit(user_id)
+        if not limit_check["allowed"]:
+            return json.dumps({
+                "success": False,
+                "error": limit_check["error"]
+            })
+        
         # Get boss_type from user_preferences if not provided
         if not boss_type:
             try:
@@ -675,6 +722,14 @@ def confirm_and_create_goal(goal: str, user_id: str, intensity: str = "medium", 
         A JSON string containing the goal and tasks created
     """
     try:
+        # Check free tier goal limit
+        limit_check = check_free_tier_goal_limit(user_id)
+        if not limit_check["allowed"]:
+            return json.dumps({
+                "success": False,
+                "error": limit_check["error"]
+            })
+        
         # Get boss_type from user_preferences if not provided
         if not boss_type:
             try:
@@ -1384,6 +1439,14 @@ def create_goal_with_task(user_id: str, task_text: str, task_date: str, goal_nam
         A JSON string with created goal and task
     """
     try:
+        # Check free tier goal limit
+        limit_check = check_free_tier_goal_limit(user_id)
+        if not limit_check["allowed"]:
+            return json.dumps({
+                "success": False,
+                "error": limit_check["error"]
+            })
+        
         # Derive goal name from task if not provided
         if not goal_name:
             # Simple generalization - remove date-specific words, make it broader
