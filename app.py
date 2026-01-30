@@ -3101,6 +3101,19 @@ def create_anonymous_user(phone_no: str) -> Optional[str]:
         user_id = auth_response.user.id
         logger.info(f"Created anonymous user with ID: {user_id} for phone: {phone_no}")
         
+        # Update the anonymous user's metadata to include phone number
+        try:
+            supabase.auth.update_user({
+                "data": {
+                    "phone_no": phone_no,
+                    "is_anonymous": True
+                }
+            })
+            logger.info(f"Updated anonymous user metadata with phone: {phone_no}")
+        except Exception as update_error:
+            logger.warning(f"Could not update user metadata: {update_error}")
+            # Continue anyway, phone will be stored in user_preferences
+        
         # Insert a record into user_preferences table with phone number
         preferences_data = {
             "user_id": user_id,

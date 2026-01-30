@@ -119,13 +119,20 @@ When a phone number is not found:
    - Uses Supabase's `sign_in_anonymously()` method
    - No email or password required
    - Creates a truly anonymous user with a UUID
+   - Updates user metadata with phone number and `is_anonymous` flag
 
 2. **Create User Preferences Record**
    - Links the anonymous user_id to the WhatsApp phone number
    - Default `boss_type`: "execution"
    - Default `boss_language`: "en" (updated after selection)
    - Default subscription: "free"
-   - Only stores phone number (no email)
+   - Stores phone number for lookup
+
+### Where Phone Number is Stored
+
+The phone number is stored in two places:
+1. **Supabase Auth User Metadata**: `user.user_metadata.phone_no`
+2. **User Preferences Table**: `user_preferences.phone_no` (for quick lookup)
 
 ## Testing the Feature
 
