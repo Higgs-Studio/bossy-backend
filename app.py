@@ -3081,6 +3081,7 @@ def lookup_user_id_by_phone(phone_no: str) -> Optional[str]:
 def create_anonymous_user(phone_no: str) -> Optional[str]:
     """
     Create an anonymous user in Supabase Auth and insert a record in user_preferences.
+    Uses phone number only, no email required.
     
     Args:
         phone_no: The phone number (cleaned, without whatsapp: prefix or +)
@@ -3090,16 +3091,8 @@ def create_anonymous_user(phone_no: str) -> Optional[str]:
     """
     try:
         # Create an anonymous user in Supabase Auth
-        auth_response = supabase.auth.sign_up({
-            "email": f"{phone_no}@anonymous.bossy.app",  # Create a dummy email
-            "password": os.urandom(32).hex(),  # Generate a random password
-            "options": {
-                "data": {
-                    "phone_no": phone_no,
-                    "is_anonymous": True
-                }
-            }
-        })
+        # This creates a user without email/password
+        auth_response = supabase.auth.sign_in_anonymously()
         
         if not auth_response.user:
             logger.error(f"Failed to create anonymous user for phone: {phone_no}")
@@ -3108,15 +3101,14 @@ def create_anonymous_user(phone_no: str) -> Optional[str]:
         user_id = auth_response.user.id
         logger.info(f"Created anonymous user with ID: {user_id} for phone: {phone_no}")
         
-        # Insert a record into user_preferences table
+        # Insert a record into user_preferences table with phone number
         preferences_data = {
             "user_id": user_id,
             "phone_no": phone_no,
             "boss_type": "execution",  # Default boss type
             "boss_language": "en",  # Default language (will be updated after user selection)
             "subscription_status": "free",  # Default subscription
-            "plan_name": "Free",
-            "email": f"{phone_no}@anonymous.bossy.app"  # Store the anonymous email
+            "plan_name": "Free"
         }
         
         pref_result = supabase.table("user_preferences").insert(preferences_data).execute()

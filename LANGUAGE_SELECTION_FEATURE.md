@@ -67,8 +67,9 @@ from language_prompts import (
 ```
 
 ##### Modified `create_anonymous_user()` Function
-- Added `email` field to `user_preferences` insert (stores anonymous email)
-- Default `boss_language` is set to "en" initially
+- Uses `sign_in_anonymously()` to create users without email/password
+- Only stores `phone_no` in `user_preferences` table
+- Default `boss_language` is set to "en" initially (updated after user selection)
 
 ##### Modified `process_message()` Function
 The function now handles three states:
@@ -91,7 +92,7 @@ The function now handles three states:
 
 The `user_preferences` table now includes:
 - `boss_language`: Updated to user's selected language (after Step 2)
-- `email`: Stores anonymous email for new users
+- `phone_no`: Stores the WhatsApp phone number (without whatsapp: prefix or +)
 
 ### Key Features
 
@@ -114,16 +115,17 @@ The `user_preferences` table now includes:
 
 When a phone number is not found:
 
-1. **Create Supabase Auth User**
-   - Email: `{phone_no}@anonymous.bossy.app`
-   - Password: Random 32-byte hex string
-   - Metadata includes phone number and `is_anonymous` flag
+1. **Create Anonymous Supabase Auth User**
+   - Uses Supabase's `sign_in_anonymously()` method
+   - No email or password required
+   - Creates a truly anonymous user with a UUID
 
 2. **Create User Preferences Record**
+   - Links the anonymous user_id to the WhatsApp phone number
    - Default `boss_type`: "execution"
    - Default `boss_language`: "en" (updated after selection)
    - Default subscription: "free"
-   - Stores phone number and email
+   - Only stores phone number (no email)
 
 ## Testing the Feature
 
