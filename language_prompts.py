@@ -5,7 +5,7 @@ This module provides language-specific prompts and messages for the AI boss chat
 Supports: English (en), Traditional Chinese (zh-TW), Simplified Chinese (zh-CN), Cantonese (zh-HK)
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # ============================================================================
 # Core Personality Prompts by Boss Type and Language
@@ -779,6 +779,21 @@ BOSS_NAMES = {
 }
 
 # ============================================================================
+# Language Selection Message
+# ============================================================================
+
+LANGUAGE_SELECTION_MESSAGE = """Welcome! I'm your accountability boss.
+
+Before we start, which language would you prefer?
+
+1. English
+2. 繁體中文 (Traditional Chinese)
+3. 简体中文 (Simplified Chinese)
+4. 廣東話 (Cantonese)
+
+Please reply with the number (1, 2, 3, or 4)."""
+
+# ============================================================================
 # First Message Greetings by Boss Type and Language
 # ============================================================================
 
@@ -958,3 +973,28 @@ def get_first_message_greeting(boss_type: str, language: str = "en") -> str:
     """Get the first message greeting for a specific boss type and language."""
     greetings = FIRST_MESSAGE_GREETINGS.get(language, FIRST_MESSAGE_GREETINGS["en"])
     return greetings.get(boss_type, greetings["execution"])
+
+def get_language_selection_message() -> str:
+    """Get the language selection message for new users."""
+    return LANGUAGE_SELECTION_MESSAGE
+
+def parse_language_selection(user_input: str) -> Optional[str]:
+    """
+    Parse user's language selection input and return the language code.
+    
+    Args:
+        user_input: User's input (e.g., "1", "2", "3", "4")
+        
+    Returns:
+        Language code ("en", "zh-TW", "zh-CN", "zh-HK") or None if invalid
+    """
+    user_input = user_input.strip()
+    
+    language_map = {
+        "1": "en",
+        "2": "zh-TW",
+        "3": "zh-CN",
+        "4": "zh-HK"
+    }
+    
+    return language_map.get(user_input)
