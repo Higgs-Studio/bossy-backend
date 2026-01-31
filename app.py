@@ -10,6 +10,8 @@ import logging
 import httpx
 import json
 import random
+import secrets
+import string
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 from datetime import datetime, date, timedelta
 from difflib import SequenceMatcher
@@ -27,7 +29,9 @@ from language_prompts import (
     get_personality_prompt,
     get_language_name,
     get_first_message_greeting,
-    get_boss_name
+    get_boss_name,
+    get_language_selection_message,
+    parse_language_selection
 )
 
 load_dotenv()
@@ -2556,33 +2560,22 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
                     logger.warning(f"Could not check message history: {e}. Assuming not first message.")
                 is_first_message = False
         
-        # If this is the first message, return greeting and save to history
+        # If this is the first message, send language selection
         if is_first_message:
             try:
-                # Get user's boss_type and boss_language from user_preferences
-                pref_result = supabase.table("user_preferences").select("boss_type, boss_language").eq("user_id", user_id).execute()
+                # Send language selection message
+                language_selection_msg = get_language_selection_message()
                 
-                boss_type = "execution"  # default
-                boss_language = "en"  # default
+                logger.info(f"Sending language selection message for new user {user_id}")
                 
-                if pref_result.data and len(pref_result.data) > 0:
-                    boss_type = pref_result.data[0].get("boss_type", "execution")
-                    boss_language = pref_result.data[0].get("boss_language", "en")
-                
-                # Get the greeting message
-                greeting = get_first_message_greeting(boss_type, boss_language)
-                
-                logger.info(f"Sending first message greeting for user {user_id}, boss: {get_boss_name(boss_type)}")
-                
-                # Save the first greeting conversation to checkpointer if available
+                # Save the language selection conversation to checkpointer if available
                 if checkpointer_instance:
                     try:
-                        # Create initial state with the greeting conversation already in it
-                        # The graph will process this and save it to the checkpointer
-                        greeting_state = {
+                        # Create initial state with the language selection conversation
+                        selection_state = {
                             "messages": [
                                 HumanMessage(content=user_message),
-                                AIMessage(content=greeting)
+                                AIMessage(content=language_selection_msg)
                             ],
                             "user_id": user_id
                         }
@@ -2591,29 +2584,114 @@ async def process_message(user_message: str, user_id: str = "default_user", thre
                         temp_graph = create_agent_graph(checkpointer=checkpointer_instance)
                         
                         try:
-                            # Invoke the graph which will:
-                            # 1. Save the user message and greeting to checkpointer
-                            # 2. Potentially generate another response (which we'll ignore)
-                            # The important part is that the greeting gets saved in history
-                            await temp_graph.ainvoke(greeting_state, config=config)
-                            logger.info(f"First message conversation with greeting saved to checkpointer for user {user_id}")
+                            await temp_graph.ainvoke(selection_state, config=config)
+                            logger.info(f"Language selection conversation saved to checkpointer for user {user_id}")
                         except Exception as invoke_error:
                             error_msg = str(invoke_error).lower()
                             if 'relation' in error_msg and 'does not exist' in error_msg:
-                                logger.error(f"Could not save first message - database tables not created: {invoke_error}")
+                                logger.error(f"Could not save language selection - database tables not created: {invoke_error}")
                             else:
-                                logger.warning(f"Could not save first message to checkpointer: {invoke_error}")
-                            # Continue anyway, greeting will still be sent
+                                logger.warning(f"Could not save language selection to checkpointer: {invoke_error}")
                         
                     except Exception as checkpoint_error:
-                        logger.warning(f"Error setting up checkpoint for first message: {checkpoint_error}")
-                        # Continue anyway
+                        logger.warning(f"Error setting up checkpoint for language selection: {checkpoint_error}")
                 
-                return greeting
+                return language_selection_msg
                 
             except Exception as e:
-                logger.error(f"Error getting boss profile for first message: {e}")
+                logger.error(f"Error sending language selection: {e}")
                 # Fall through to normal processing if there's an error
+        
+        # Check if user is responding to language selection
+        # (They have 1 message pair in history - the language selection)
+        if checkpointer_instance:
+            try:
+                state_history = [state async for state in checkpointer_instance.alist(config)]
+                
+                # If there's exactly one checkpoint (language selection sent, waiting for response)
+                if state_history and len(state_history) == 1:
+                    # Check if the last bot message was the language selection
+                    last_state = state_history[0]
+                    messages = last_state.values.get("messages", [])
+                    
+                    if len(messages) >= 2:
+                        last_ai_message = None
+                        for msg in reversed(messages):
+                            if isinstance(msg, AIMessage):
+                                last_ai_message = msg
+                                break
+                        
+                        # Check if it contains the language selection text
+                        if last_ai_message and "which language would you prefer" in last_ai_message.content.lower():
+                            # User is responding to language selection
+                            selected_language = parse_language_selection(user_message)
+                            
+                            if selected_language:
+                                # Valid language selection - update user preferences
+                                try:
+                                    supabase.table("user_preferences").update({
+                                        "boss_language": selected_language
+                                    }).eq("user_id", user_id).execute()
+                                    
+                                    logger.info(f"Updated language to {selected_language} for user {user_id}")
+                                    
+                                    # Get user's boss_type
+                                    pref_result = supabase.table("user_preferences").select("boss_type").eq("user_id", user_id).execute()
+                                    boss_type = "execution"  # default
+                                    if pref_result.data and len(pref_result.data) > 0:
+                                        boss_type = pref_result.data[0].get("boss_type", "execution")
+                                    
+                                    # Get the greeting message in the selected language
+                                    greeting = get_first_message_greeting(boss_type, selected_language)
+                                    
+                                    # Save the greeting to conversation history
+                                    if checkpointer_instance:
+                                        try:
+                                            greeting_state = {
+                                                "messages": [
+                                                    HumanMessage(content=user_message),
+                                                    AIMessage(content=greeting)
+                                                ],
+                                                "user_id": user_id
+                                            }
+                                            temp_graph = create_agent_graph(checkpointer=checkpointer_instance)
+                                            await temp_graph.ainvoke(greeting_state, config=config)
+                                            logger.info(f"Greeting in {selected_language} saved for user {user_id}")
+                                        except Exception as e:
+                                            logger.warning(f"Could not save greeting to checkpointer: {e}")
+                                    
+                                    return greeting
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error updating language preference: {e}")
+                                    return "Sorry, there was an error saving your language preference. Please try again."
+                            else:
+                                # Invalid language selection - ask again
+                                retry_message = """Please choose a valid language option by replying with a number:
+
+1. English
+2. 繁體中文 (Traditional Chinese)
+3. 简体中文 (Simplified Chinese)
+4. 廣東話 (Cantonese)"""
+                                
+                                if checkpointer_instance:
+                                    try:
+                                        retry_state = {
+                                            "messages": [
+                                                HumanMessage(content=user_message),
+                                                AIMessage(content=retry_message)
+                                            ],
+                                            "user_id": user_id
+                                        }
+                                        temp_graph = create_agent_graph(checkpointer=checkpointer_instance)
+                                        await temp_graph.ainvoke(retry_state, config=config)
+                                    except Exception as e:
+                                        logger.warning(f"Could not save retry message to checkpointer: {e}")
+                                
+                                return retry_message
+                                
+            except Exception as e:
+                logger.warning(f"Error checking for language selection state: {e}")
         
         # Prepare initial state with new message
         # If checkpointer is enabled, previous messages will be loaded automatically
@@ -3002,6 +3080,114 @@ def lookup_user_id_by_phone(phone_no: str) -> Optional[str]:
         return None
 
 
+def generate_secure_password(length: int = 32) -> str:
+    """
+    Generate a cryptographically secure random password.
+    
+    Args:
+        length: Length of the password (default 32 characters)
+        
+    Returns:
+        A secure random password string
+    """
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(secrets.choice(alphabet) for i in range(length))
+    return password
+
+
+def create_phone_user(phone_no: str) -> Optional[str]:
+    """
+    Create a user in Supabase Auth using phone provider.
+    A secure random password is generated for each user (they never need to know it).
+    WhatsApp interaction serves as the authentication mechanism.
+    
+    Args:
+        phone_no: The phone number (cleaned, without whatsapp: prefix or +)
+        
+    Returns:
+        The user_id (UUID) if created successfully, None otherwise
+    """
+    try:
+        # Check if user already exists in user_preferences
+        existing_user = supabase.table("user_preferences")\
+            .select("user_id")\
+            .eq("phone_no", phone_no)\
+            .execute()
+        
+        if existing_user.data and len(existing_user.data) > 0:
+            user_id = existing_user.data[0]["user_id"]
+            logger.info(f"Found existing user with ID: {user_id} for phone: {phone_no}")
+            return user_id
+        
+        # Format phone number for Supabase (needs + prefix)
+        formatted_phone = f"+{phone_no}"
+        
+        # Generate a secure random password (user never needs to know this)
+        # Required by Supabase, but WhatsApp handles actual authentication
+        secure_password = generate_secure_password()
+        
+        # Create user with phone provider
+        try:
+            auth_response = supabase.auth.sign_up({
+                "phone": formatted_phone,
+                "password": secure_password,
+                "options": {
+                    "data": {
+                        "phone_no": phone_no,
+                        "auth_method": "whatsapp"
+                    }
+                }
+            })
+            
+            if not auth_response.user:
+                logger.error(f"Failed to create phone user for phone: {phone_no}")
+                return None
+                
+            user_id = auth_response.user.id
+            logger.info(f"Created phone user with ID: {user_id} for phone: {phone_no}")
+            
+        except Exception as signup_error:
+            # If sign_up fails (e.g., user already exists), try to find existing user
+            logger.warning(f"Sign up failed: {signup_error}")
+            
+            # Try to find existing user by phone in user_preferences
+            existing_user = supabase.table("user_preferences")\
+                .select("user_id")\
+                .eq("phone_no", phone_no)\
+                .execute()
+            
+            if existing_user.data and len(existing_user.data) > 0:
+                user_id = existing_user.data[0]["user_id"]
+                logger.info(f"Found existing user after signup error with ID: {user_id} for phone: {phone_no}")
+                return user_id
+            else:
+                logger.error(f"Could not create or find user for phone: {phone_no}")
+                return None
+        
+        # Insert a record into user_preferences table with phone number
+        preferences_data = {
+            "user_id": user_id,
+            "phone_no": phone_no,
+            "boss_type": "execution",  # Default boss type
+            "boss_language": "en",  # Default language (will be updated after user selection)
+            "subscription_status": "free",  # Default subscription
+            "plan_name": "Free"
+        }
+        
+        pref_result = supabase.table("user_preferences").insert(preferences_data).execute()
+        
+        if pref_result.data and len(pref_result.data) > 0:
+            logger.info(f"Created user_preferences record for user_id: {user_id}, phone: {phone_no}")
+            return user_id
+        else:
+            logger.error(f"Failed to create user_preferences record for user_id: {user_id}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error creating phone user for phone {phone_no}: {e}")
+        return None
+
+
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     """
@@ -3021,16 +3207,23 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     user_id = lookup_user_id_by_phone(phone_no)
     
     if not user_id:
-        logger.error(f"User not found for phone number: {phone_no}")
-        # Send error message asynchronously
-        background_tasks.add_task(
-            send_whatsapp_message,
-            sender_number,
-            "Sorry, your phone number is not registered. Please contact support."
-        )
-        # Return empty TwiML response immediately
-        response = MessagingResponse()
-        return PlainTextResponse(str(response), media_type="application/xml")
+        logger.info(f"User not found for phone number: {phone_no}. Creating phone user...")
+        # Create phone user and user_preferences record
+        user_id = create_phone_user(phone_no)
+        
+        if not user_id:
+            logger.error(f"Failed to create phone user for phone number: {phone_no}")
+            # Send error message asynchronously
+            background_tasks.add_task(
+                send_whatsapp_message,
+                sender_number,
+                "Sorry, we encountered an error setting up your account. Please try again later."
+            )
+            # Return empty TwiML response immediately
+            response = MessagingResponse()
+            return PlainTextResponse(str(response), media_type="application/xml")
+        
+        logger.info(f"Successfully created phone user for phone: {phone_no}, user_id: {user_id}")
     
     logger.info(f"Message received from {sender_number} (phone_no: {phone_no}, user_id: {user_id}): {incoming_message}")
     
