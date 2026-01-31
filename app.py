@@ -3078,10 +3078,10 @@ def lookup_user_id_by_phone(phone_no: str) -> Optional[str]:
         return None
 
 
-def create_anonymous_user(phone_no: str) -> Optional[str]:
+def create_phone_user(phone_no: str) -> Optional[str]:
     """
-    Create an anonymous user in Supabase Auth and insert a record in user_preferences.
-    Uses phone number only, no email required.
+    Create a user in Supabase Auth using phone authentication provider.
+    Uses phone number with the WhatsApp number as the authentication method.
     
     Args:
         phone_no: The phone number (cleaned, without whatsapp: prefix or +)
@@ -3090,29 +3090,49 @@ def create_anonymous_user(phone_no: str) -> Optional[str]:
         The user_id (UUID) if created successfully, None otherwise
     """
     try:
-        # Create an anonymous user in Supabase Auth
-        # This creates a user without email/password
-        auth_response = supabase.auth.sign_in_anonymously()
+        # Format phone number for Supabase (needs + prefix)
+        formatted_phone = f"+{phone_no}"
         
-        if not auth_response.user:
-            logger.error(f"Failed to create anonymous user for phone: {phone_no}")
-            return None
-            
-        user_id = auth_response.user.id
-        logger.info(f"Created anonymous user with ID: {user_id} for phone: {phone_no}")
-        
-        # Update the anonymous user's metadata to include phone number
+        # Try to sign in first (in case user already exists)
         try:
-            supabase.auth.update_user({
-                "data": {
-                    "phone_no": phone_no,
-                    "is_anonymous": True
+            # Attempt to get or create user with phone authentication
+            # Note: In production, you would typically send an OTP here
+            # For WhatsApp integration, we're using phone as identifier without OTP
+            auth_response = supabase.auth.sign_up({
+                "phone": formatted_phone,
+                "password": None,  # Using passwordless phone auth
+                "options": {
+                    "data": {
+                        "phone_no": phone_no,
+                        "auth_method": "whatsapp"
+                    }
                 }
             })
-            logger.info(f"Updated anonymous user metadata with phone: {phone_no}")
-        except Exception as update_error:
-            logger.warning(f"Could not update user metadata: {update_error}")
-            # Continue anyway, phone will be stored in user_preferences
+            
+            if not auth_response.user:
+                logger.error(f"Failed to create phone user for phone: {phone_no}")
+                return None
+                
+            user_id = auth_response.user.id
+            logger.info(f"Created phone user with ID: {user_id} for phone: {phone_no}")
+            
+        except Exception as signup_error:
+            # If sign_up fails (e.g., user already exists), try to get existing user
+            logger.warning(f"Sign up error (user may exist): {signup_error}")
+            
+            # Try to find existing user by phone in user_preferences
+            existing_user = supabase.table("user_preferences")\
+                .select("user_id")\
+                .eq("phone_no", phone_no)\
+                .execute()
+            
+            if existing_user.data and len(existing_user.data) > 0:
+                user_id = existing_user.data[0]["user_id"]
+                logger.info(f"Found existing user with ID: {user_id} for phone: {phone_no}")
+                return user_id
+            else:
+                logger.error(f"Could not create or find user for phone: {phone_no}")
+                return None
         
         # Insert a record into user_preferences table with phone number
         preferences_data = {
@@ -3134,7 +3154,7 @@ def create_anonymous_user(phone_no: str) -> Optional[str]:
             return None
             
     except Exception as e:
-        logger.error(f"Error creating anonymous user for phone {phone_no}: {e}")
+        logger.error(f"Error creating phone user for phone {phone_no}: {e}")
         return None
 
 
@@ -3157,12 +3177,12 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     user_id = lookup_user_id_by_phone(phone_no)
     
     if not user_id:
-        logger.info(f"User not found for phone number: {phone_no}. Creating anonymous user...")
-        # Create anonymous user and user_preferences record
-        user_id = create_anonymous_user(phone_no)
+        logger.info(f"User not found for phone number: {phone_no}. Creating phone user...")
+        # Create phone user and user_preferences record
+        user_id = create_phone_user(phone_no)
         
         if not user_id:
-            logger.error(f"Failed to create anonymous user for phone number: {phone_no}")
+            logger.error(f"Failed to create phone user for phone number: {phone_no}")
             # Send error message asynchronously
             background_tasks.add_task(
                 send_whatsapp_message,
@@ -3173,7 +3193,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
             response = MessagingResponse()
             return PlainTextResponse(str(response), media_type="application/xml")
         
-        logger.info(f"Successfully created anonymous user for phone: {phone_no}, user_id: {user_id}")
+        logger.info(f"Successfully created phone user for phone: {phone_no}, user_id: {user_id}")
     
     logger.info(f"Message received from {sender_number} (phone_no: {phone_no}, user_id: {user_id}): {incoming_message}")
     
