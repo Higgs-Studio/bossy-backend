@@ -10,6 +10,8 @@ import logging
 import httpx
 import json
 import random
+import secrets
+import string
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 from datetime import datetime, date, timedelta
 from difflib import SequenceMatcher
@@ -3078,10 +3080,26 @@ def lookup_user_id_by_phone(phone_no: str) -> Optional[str]:
         return None
 
 
+def generate_secure_password(length: int = 32) -> str:
+    """
+    Generate a cryptographically secure random password.
+    
+    Args:
+        length: Length of the password (default 32 characters)
+        
+    Returns:
+        A secure random password string
+    """
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(secrets.choice(alphabet) for i in range(length))
+    return password
+
+
 def create_phone_user(phone_no: str) -> Optional[str]:
     """
-    Create an anonymous user in Supabase Auth and then update with phone number.
-    This approach uses anonymous auth first, then associates the phone number.
+    Create a user in Supabase Auth using phone provider.
+    A secure random password is generated for each user (they never need to know it).
+    WhatsApp interaction serves as the authentication mechanism.
     
     Args:
         phone_no: The phone number (cleaned, without whatsapp: prefix or +)
@@ -3101,32 +3119,50 @@ def create_phone_user(phone_no: str) -> Optional[str]:
             logger.info(f"Found existing user with ID: {user_id} for phone: {phone_no}")
             return user_id
         
-        # Create an anonymous user first
-        auth_response = supabase.auth.sign_in_anonymously()
-        
-        if not auth_response.user:
-            logger.error(f"Failed to create anonymous user for phone: {phone_no}")
-            return None
-            
-        user_id = auth_response.user.id
-        logger.info(f"Created anonymous user with ID: {user_id} for phone: {phone_no}")
-        
         # Format phone number for Supabase (needs + prefix)
         formatted_phone = f"+{phone_no}"
         
-        # Update the anonymous user with phone number
+        # Generate a secure random password (user never needs to know this)
+        # Required by Supabase, but WhatsApp handles actual authentication
+        secure_password = generate_secure_password()
+        
+        # Create user with phone provider
         try:
-            update_response = supabase.auth.update_user({
+            auth_response = supabase.auth.sign_up({
                 "phone": formatted_phone,
-                "data": {
-                    "phone_no": phone_no,
-                    "auth_method": "whatsapp"
+                "password": secure_password,
+                "options": {
+                    "data": {
+                        "phone_no": phone_no,
+                        "auth_method": "whatsapp"
+                    }
                 }
             })
-            logger.info(f"Updated user {user_id} with phone number: {formatted_phone}")
-        except Exception as update_error:
-            logger.warning(f"Could not update user with phone number: {update_error}")
-            # Continue anyway, phone will be stored in user_preferences
+            
+            if not auth_response.user:
+                logger.error(f"Failed to create phone user for phone: {phone_no}")
+                return None
+                
+            user_id = auth_response.user.id
+            logger.info(f"Created phone user with ID: {user_id} for phone: {phone_no}")
+            
+        except Exception as signup_error:
+            # If sign_up fails (e.g., user already exists), try to find existing user
+            logger.warning(f"Sign up failed: {signup_error}")
+            
+            # Try to find existing user by phone in user_preferences
+            existing_user = supabase.table("user_preferences")\
+                .select("user_id")\
+                .eq("phone_no", phone_no)\
+                .execute()
+            
+            if existing_user.data and len(existing_user.data) > 0:
+                user_id = existing_user.data[0]["user_id"]
+                logger.info(f"Found existing user after signup error with ID: {user_id} for phone: {phone_no}")
+                return user_id
+            else:
+                logger.error(f"Could not create or find user for phone: {phone_no}")
+                return None
         
         # Insert a record into user_preferences table with phone number
         preferences_data = {

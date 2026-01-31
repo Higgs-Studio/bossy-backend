@@ -67,11 +67,11 @@ from language_prompts import (
 ```
 
 ##### Modified `create_phone_user()` Function (formerly `create_anonymous_user()`)
-- Creates anonymous user first using `sign_in_anonymously()`
-- Updates the user with phone number using `update_user()`
-- Stores `phone_no` in both auth metadata and `user_preferences` table
+- Creates users with phone provider using `sign_up()` with phone and password
+- Generates a secure random password that user never needs to know
+- Stores `phone_no` as primary auth credential and in `user_preferences` table
 - Default `boss_language` is set to "en" initially (updated after user selection)
-- Avoids password requirements by using anonymous auth + update approach
+- Uses phone provider (not anonymous) for proper user identity
 
 ##### Modified `process_message()` Function
 The function now handles three states:
