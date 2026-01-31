@@ -3080,8 +3080,8 @@ def lookup_user_id_by_phone(phone_no: str) -> Optional[str]:
 
 def create_phone_user(phone_no: str) -> Optional[str]:
     """
-    Create a user in Supabase Auth using phone authentication provider.
-    Uses phone number with the WhatsApp number as the authentication method.
+    Create an anonymous user in Supabase Auth and then update with phone number.
+    This approach uses anonymous auth first, then associates the phone number.
     
     Args:
         phone_no: The phone number (cleaned, without whatsapp: prefix or +)
@@ -3090,49 +3090,43 @@ def create_phone_user(phone_no: str) -> Optional[str]:
         The user_id (UUID) if created successfully, None otherwise
     """
     try:
+        # Check if user already exists in user_preferences
+        existing_user = supabase.table("user_preferences")\
+            .select("user_id")\
+            .eq("phone_no", phone_no)\
+            .execute()
+        
+        if existing_user.data and len(existing_user.data) > 0:
+            user_id = existing_user.data[0]["user_id"]
+            logger.info(f"Found existing user with ID: {user_id} for phone: {phone_no}")
+            return user_id
+        
+        # Create an anonymous user first
+        auth_response = supabase.auth.sign_in_anonymously()
+        
+        if not auth_response.user:
+            logger.error(f"Failed to create anonymous user for phone: {phone_no}")
+            return None
+            
+        user_id = auth_response.user.id
+        logger.info(f"Created anonymous user with ID: {user_id} for phone: {phone_no}")
+        
         # Format phone number for Supabase (needs + prefix)
         formatted_phone = f"+{phone_no}"
         
-        # Try to sign in first (in case user already exists)
+        # Update the anonymous user with phone number
         try:
-            # Attempt to get or create user with phone authentication
-            # Note: In production, you would typically send an OTP here
-            # For WhatsApp integration, we're using phone as identifier without OTP
-            auth_response = supabase.auth.sign_up({
+            update_response = supabase.auth.update_user({
                 "phone": formatted_phone,
-                "password": None,  # Using passwordless phone auth
-                "options": {
-                    "data": {
-                        "phone_no": phone_no,
-                        "auth_method": "whatsapp"
-                    }
+                "data": {
+                    "phone_no": phone_no,
+                    "auth_method": "whatsapp"
                 }
             })
-            
-            if not auth_response.user:
-                logger.error(f"Failed to create phone user for phone: {phone_no}")
-                return None
-                
-            user_id = auth_response.user.id
-            logger.info(f"Created phone user with ID: {user_id} for phone: {phone_no}")
-            
-        except Exception as signup_error:
-            # If sign_up fails (e.g., user already exists), try to get existing user
-            logger.warning(f"Sign up error (user may exist): {signup_error}")
-            
-            # Try to find existing user by phone in user_preferences
-            existing_user = supabase.table("user_preferences")\
-                .select("user_id")\
-                .eq("phone_no", phone_no)\
-                .execute()
-            
-            if existing_user.data and len(existing_user.data) > 0:
-                user_id = existing_user.data[0]["user_id"]
-                logger.info(f"Found existing user with ID: {user_id} for phone: {phone_no}")
-                return user_id
-            else:
-                logger.error(f"Could not create or find user for phone: {phone_no}")
-                return None
+            logger.info(f"Updated user {user_id} with phone number: {formatted_phone}")
+        except Exception as update_error:
+            logger.warning(f"Could not update user with phone number: {update_error}")
+            # Continue anyway, phone will be stored in user_preferences
         
         # Insert a record into user_preferences table with phone number
         preferences_data = {

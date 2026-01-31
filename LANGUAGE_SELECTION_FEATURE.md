@@ -67,10 +67,11 @@ from language_prompts import (
 ```
 
 ##### Modified `create_phone_user()` Function (formerly `create_anonymous_user()`)
-- Uses phone-based authentication with WhatsApp number instead of anonymous auth
-- Creates users with phone provider in Supabase Auth
-- Only stores `phone_no` in `user_preferences` table
+- Creates anonymous user first using `sign_in_anonymously()`
+- Updates the user with phone number using `update_user()`
+- Stores `phone_no` in both auth metadata and `user_preferences` table
 - Default `boss_language` is set to "en" initially (updated after user selection)
+- Avoids password requirements by using anonymous auth + update approach
 
 ##### Modified `process_message()` Function
 The function now handles three states:
