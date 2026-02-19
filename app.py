@@ -539,7 +539,6 @@ def create_task_in_supabase(task_text: str, user_id: str, goal_id: str = None, t
         
         task_data = {
             "goal_id": goal_id,
-            "user_id": user_id,
             "task_date": task_date,
             "task_text": task_text,
             "status": "todo",
@@ -868,7 +867,6 @@ def confirm_and_create_task(task_text: str, user_id: str, goal_id: str = None, t
         
         task_data = {
             "goal_id": goal_id,
-            "user_id": user_id,
             "task_date": task_date,
             "task_text": task_text,
             "status": "todo",
