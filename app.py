@@ -419,7 +419,6 @@ Return ONLY the JSON array, no other text."""
         for task in tasks:
             task_data = {
                 "goal_id": goal_id,
-                "user_id": user_id,
                 "task_date": task.get("task_date", start_date),
                 "task_text": task.get("task_text", "Untitled Task"),
                 "status": "todo",
@@ -807,7 +806,6 @@ Return ONLY the JSON array, no other text."""
         for task in tasks:
             task_data = {
                 "goal_id": goal_id,
-                "user_id": user_id,
                 "task_date": task.get("task_date", start_date),
                 "task_text": task.get("task_text", "Untitled Task"),
                 "status": "todo",
@@ -1458,7 +1456,6 @@ def create_goal_with_task(user_id: str, task_text: str, task_date: str, goal_nam
         
         task_data = {
             "goal_id": goal_id,
-            "user_id": user_id,
             "task_date": task_date,
             "task_text": task_text,
             "status": "todo",
@@ -1637,7 +1634,6 @@ def create_recurring_tasks(
         def _insert_recurring_task(task_date_iso: str) -> None:
             task_data = {
                 "goal_id": goal_id,
-                "user_id": user_id,
                 "task_date": task_date_iso,
                 "task_text": task_text,
                 "status": "todo",
